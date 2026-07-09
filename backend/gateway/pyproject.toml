@@ -14,6 +14,7 @@ dependencies = [
     "httpx>=0.28",
     "redis[hiredis]>=5.2",
     "structlog>=24.1",
+    "prometheus-client>=0.20.0",
 ]
 
 [project.optional-dependencies]
@@ -23,6 +24,7 @@ dev = [
     "pytest-cov>=5.0",
     "ruff>=0.6",
     "mypy>=1.11",
+    "bandit>=1.7",
 ]
 
 [tool.ruff]
