@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import shutil
+import subprocess
 from pathlib import Path
 
 from spectre.findings import Finding, ScanResult, Severity
@@ -27,6 +29,16 @@ def _ssh_setting(name: str, content: str | None) -> str | None:
         if stripped.split(None, 1)[0].lower() == name.lower():
             return stripped.split(None, 1)[1] if " " in stripped else ""
     return None
+
+
+def _service_active(name: str) -> bool:
+    if shutil.which("systemctl") is None:
+        out = subprocess.run(["pgrep", "-x", name], capture_output=True, text=True)
+        return bool(out.stdout.strip())
+    out = subprocess.run(
+        ["systemctl", "is-active", name], capture_output=True, text=True
+    )
+    return out.stdout.strip() == "active"
 
 
 def _check_ssh() -> list[Finding]:
@@ -65,6 +77,18 @@ def _check_ssh() -> list[Finding]:
                 Severity.medium,
                 f"PasswordAuthentication={pwd_auth or 'unset'}",
                 "Set 'PasswordAuthentication no' and use key-based auth.",
+            )
+        )
+
+    empty = _ssh_setting("PermitEmptyPasswords", cfg)
+    if empty is None or empty.lower() != "no":
+        findings.append(
+            Finding(
+                DOMAIN,
+                "Empty SSH passwords permitted",
+                Severity.high,
+                f"PermitEmptyPasswords={empty or 'unset (defaults to no, but verify)'}",
+                "Set 'PermitEmptyPasswords no'.",
             )
         )
     return findings
@@ -122,10 +146,81 @@ def _check_boot_password() -> list[Finding]:
     return findings
 
 
+def _check_auditd() -> list[Finding]:
+    if not _service_active("auditd"):
+        return [
+            Finding(
+                DOMAIN,
+                "auditd not running",
+                Severity.medium,
+                "auditd service is not active",
+                "Enable auditd to record system call and login activity.",
+            )
+        ]
+    return []
+
+
+def _check_tmp_noexec() -> list[Finding]:
+    mounts = _read_file("/proc/mounts") or ""
+    for line in mounts.splitlines():
+        parts = line.split()
+        if len(parts) >= 4 and parts[1] == "/tmp":
+            opts = parts[3]
+            if "noexec" not in opts:
+                return [
+                    Finding(
+                        DOMAIN,
+                        "/tmp is executable",
+                        Severity.low,
+                        "/tmp mounted without the noexec option",
+                        "Remount /tmp with noexec,nosuid,nodev.",
+                    )
+                ]
+    return []
+
+
+def _check_password_aging() -> list[Finding]:
+    findings: list[Finding] = []
+    defs = _read_file("/etc/login.defs")
+    if defs is None:
+        return findings
+    max_days = None
+    min_days = None
+    for line in defs.splitlines():
+        if line.startswith("PASS_MAX_DAYS"):
+            max_days = int(line.split()[1])
+        elif line.startswith("PASS_MIN_DAYS"):
+            min_days = int(line.split()[1])
+    if max_days is None or max_days > 365:
+        findings.append(
+            Finding(
+                DOMAIN,
+                "Password max age too long",
+                Severity.low,
+                f"PASS_MAX_DAYS={max_days if max_days is not None else 'unset'}",
+                "Set PASS_MAX_DAYS to 90 or fewer.",
+            )
+        )
+    if min_days is None or min_days < 1:
+        findings.append(
+            Finding(
+                DOMAIN,
+                "Password min age not enforced",
+                Severity.low,
+                f"PASS_MIN_DAYS={min_days if min_days is not None else 'unset'}",
+                "Set PASS_MIN_DAYS to at least 1 to limit rapid changes.",
+            )
+        )
+    return findings
+
+
 def check() -> ScanResult:
     findings: list[Finding] = []
     findings += _check_ssh()
     findings += _check_updates()
     findings += _check_core_dumps()
     findings += _check_boot_password()
+    findings += _check_auditd()
+    findings += _check_tmp_noexec()
+    findings += _check_password_aging()
     return ScanResult(DOMAIN, findings)

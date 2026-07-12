@@ -66,8 +66,70 @@ def _check_open_ports() -> list[Finding]:
     return findings
 
 
+def _check_default_policy() -> list[Finding]:
+    findings: list[Finding] = []
+    if shutil.which("ufw"):
+        out = subprocess.run(
+            ["ufw", "status", "verbose"], capture_output=True, text=True
+        ).stdout
+        if "Status: active" in out:
+            if "Default: deny" not in out and "Default: DROP" not in out:
+                findings.append(
+                    Finding(
+                        DOMAIN,
+                        "Firewall default inbound policy is not deny",
+                        Severity.high,
+                        "ufw default incoming policy is not set to deny/drop",
+                        "Set 'ufw default deny incoming'.",
+                    )
+                )
+        return findings
+    if shutil.which("iptables"):
+        out = subprocess.run(
+            ["iptables", "-L", "INPUT", "-n"], capture_output=True, text=True
+        ).stdout
+        m = re.search(r"Chain INPUT \(policy (\w+)\)", out)
+        if m and m.group(1).upper() == "ACCEPT":
+            findings.append(
+                Finding(
+                    DOMAIN,
+                    "iptables INPUT chain defaults to ACCEPT",
+                    Severity.high,
+                    "iptables -L INPUT shows 'policy ACCEPT'",
+                    "Set a default DROP policy and allow only required services.",
+                )
+            )
+        elif not out.strip():
+            findings.append(
+                Finding(
+                    DOMAIN,
+                    "iptables INPUT chain has no rules",
+                    Severity.medium,
+                    "iptables -L INPUT returned no rules",
+                    "Define explicit allow rules with a default DROP.",
+                )
+            )
+        return findings
+    if shutil.which("nft"):
+        out = subprocess.run(
+            ["nft", "list", "ruleset"], capture_output=True, text=True
+        ).stdout
+        if out.strip() and "drop" not in out and "reject" not in out:
+            findings.append(
+                Finding(
+                    DOMAIN,
+                    "nftables ruleset has no drop/reject",
+                    Severity.medium,
+                    "nft list ruleset contains no drop or reject statements",
+                    "Add a default drop policy to the input chain.",
+                )
+            )
+    return findings
+
+
 def check() -> ScanResult:
     findings: list[Finding] = []
     findings += _check_firewall_active()
+    findings += _check_default_policy()
     findings += _check_open_ports()
     return ScanResult(DOMAIN, findings)

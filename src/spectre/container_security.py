@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 
@@ -40,6 +41,9 @@ def _inspect(rt: str, image: str) -> dict | None:
         return None
 
 
+SECRET_KEY_RE = re.compile(r"(?i)(password|secret|token|api[_-]?key|private[_-]?key|auth)")
+
+
 def _analyze(image: str, data: dict) -> list[Finding]:
     findings: list[Finding] = []
     cfg = data.get("Config", {}) or data.get("config", {}) or {}
@@ -64,6 +68,16 @@ def _analyze(image: str, data: dict) -> list[Finding]:
                 "Pin images to an immutable digest or specific version tag.",
             )
         )
+    elif "@sha256:" not in image:
+        findings.append(
+            Finding(
+                DOMAIN,
+                f"Image not pinned to a digest: {image}",
+                Severity.low,
+                f"Image {image} referenced by tag, not @sha256 digest",
+                "Pin the image to an immutable digest for reproducibility.",
+            )
+        )
     if data.get("HostConfig", {}).get("Privileged"):
         findings.append(
             Finding(
@@ -85,6 +99,41 @@ def _analyze(image: str, data: dict) -> list[Finding]:
                 "Avoid CapAdd; run with the default capability set.",
             )
         )
+    if data.get("HostConfig", {}).get("ReadonlyRootfs") is False:
+        findings.append(
+            Finding(
+                DOMAIN,
+                f"Writable root filesystem: {image}",
+                Severity.medium,
+                f"Image {image} runs with ReadonlyRootfs=false",
+                "Run containers with a read-only root filesystem.",
+            )
+        )
+    if not cfg.get("Healthcheck"):
+        findings.append(
+            Finding(
+                DOMAIN,
+                f"No HEALTHCHECK defined: {image}",
+                Severity.low,
+                f"Image {image} has no healthcheck configured",
+                "Add a HEALTHCHECK to enable orchestrator health detection.",
+            )
+        )
+    for env in cfg.get("Env", []) or []:
+        if "=" not in env:
+            continue
+        key, _, value = env.partition("=")
+        if SECRET_KEY_RE.search(key) and value:
+            findings.append(
+                Finding(
+                    DOMAIN,
+                    f"Possible secret in image env: {image}",
+                    Severity.high,
+                    f"Image {image} embeds '{key}' with a non-empty value",
+                    "Inject secrets at runtime via a secret manager, not the image.",
+                )
+            )
+            break
     return findings
 
 

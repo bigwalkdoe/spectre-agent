@@ -40,8 +40,10 @@ def _analyze(content: str) -> list[Finding]:
     findings: list[Finding] = []
     fail_ips: Counter[str] = Counter()
     invalid_ips: Counter[str] = Counter()
+    accepted_password = 0
     fail_re = re.compile(r"Failed password for .* from (\d+\.\d+\.\d+\.\d+)")
     invalid_re = re.compile(r"Invalid user .* from (\d+\.\d+\.\d+\.\d+)")
+    accepted_re = re.compile(r"Accepted password for .* from (\d+\.\d+\.\d+\.\d+)")
     for line in content.splitlines():
         m = fail_re.search(line)
         if m:
@@ -50,6 +52,9 @@ def _analyze(content: str) -> list[Finding]:
         m = invalid_re.search(line)
         if m:
             invalid_ips[m.group(1)] += 1
+            continue
+        if accepted_re.search(line):
+            accepted_password += 1
     for ip, count in fail_ips.items():
         if count >= 10:
             findings.append(
@@ -72,7 +77,17 @@ def _analyze(content: str) -> list[Finding]:
                     f"Block {ip}; consider disabling password auth.",
                 )
             )
-    if not fail_ips and not invalid_ips:
+    if accepted_password >= 5:
+        findings.append(
+            Finding(
+                DOMAIN,
+                "Frequent password-based SSH logins",
+                Severity.medium,
+                f"{accepted_password} 'Accepted password' events in sampled window",
+                "Prefer key-based auth; disable PasswordAuthentication.",
+            )
+        )
+    if not fail_ips and not invalid_ips and accepted_password == 0:
         findings.append(
             Finding(
                 DOMAIN,
@@ -83,6 +98,33 @@ def _analyze(content: str) -> list[Finding]:
             )
         )
     return findings
+
+
+def _check_fail2ban() -> list[Finding]:
+    if shutil.which("fail2ban-client") is None:
+        return [
+            Finding(
+                DOMAIN,
+                "fail2ban not installed",
+                Severity.medium,
+                "fail2ban-client not found on PATH",
+                "Install and enable fail2ban to auto-ban brute-force sources.",
+            )
+        ]
+    out = subprocess.run(
+        ["fail2ban-client", "status"], capture_output=True, text=True
+    ).stdout
+    if "Status" not in out:
+        return [
+            Finding(
+                DOMAIN,
+                "fail2ban not active",
+                Severity.medium,
+                "fail2ban-client status returned no active jails",
+                "Start the fail2ban service and enable the sshd jail.",
+            )
+        ]
+    return []
 
 
 def check() -> ScanResult:
@@ -100,4 +142,6 @@ def check() -> ScanResult:
                 )
             ],
         )
-    return ScanResult(DOMAIN, _analyze(content))
+    findings = _analyze(content)
+    findings += _check_fail2ban()
+    return ScanResult(DOMAIN, findings)

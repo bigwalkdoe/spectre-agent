@@ -3,13 +3,22 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+from typing import Any
 
 from spectre.findings import Finding, ScanResult, Severity
 
 DOMAIN = "kubernetes"
 
+SYSTEM_NAMESPACES = {
+    "kube-system",
+    "kube-node-lease",
+    "kube-public",
+    "kube-flannel",
+    "istio-system",
+}
 
-def _kubectl(args: list[str]) -> dict | None:
+
+def _kubectl(args: list[str]) -> dict[str, Any] | None:
     if shutil.which("kubectl") is None:
         return None
     try:
@@ -23,17 +32,32 @@ def _kubectl(args: list[str]) -> dict | None:
         return None
 
 
-def _analyze_pods(data: dict) -> list[Finding]:
+def _is_system(namespace: str) -> bool:
+    return namespace in SYSTEM_NAMESPACES
+
+
+def _analyze_pods(data: dict[str, Any]) -> list[Finding]:
     findings: list[Finding] = []
-    items = data.get("items", [])
-    for item in items:
+    for item in data.get("items", []):
         meta = item.get("metadata", {})
-        name = f"{meta.get('namespace', 'default')}/{meta.get('name', 'unknown')}"
-        spec = item.get("spec", {})
-        for container in spec.get("containers", []):
+        namespace = meta.get("namespace", "default")
+        name = f"{namespace}/{meta.get('name', 'unknown')}"
+        system = _is_system(namespace)
+        for container in item.get("spec", {}).get("containers", []):
             cname = container.get("name", "container")
-            ctx = container.get("securityContext", {})
+            ctx = container.get("securityContext", {}) or {}
             if ctx.get("privileged"):
+                if system:
+                    findings.append(
+                        Finding(
+                            DOMAIN,
+                            f"Privileged system container in {name}",
+                            Severity.low,
+                            f"system container {cname} uses privileged=true",
+                            "Confirm this privileged workload is a required system component.",
+                        )
+                    )
+                    continue
                 findings.append(
                     Finding(
                         DOMAIN,
@@ -43,8 +67,7 @@ def _analyze_pods(data: dict) -> list[Finding]:
                         "Remove privileged mode; use least-privilege capabilities.",
                     )
                 )
-            run_as = ctx.get("runAsNonRoot")
-            if run_as is False:
+            if ctx.get("runAsNonRoot") is False and not system:
                 findings.append(
                     Finding(
                         DOMAIN,
@@ -54,7 +77,7 @@ def _analyze_pods(data: dict) -> list[Finding]:
                         "Set runAsNonRoot=true and a non-zero runAsUser.",
                     )
                 )
-            if "hostPath" in container:
+            if "hostPath" in container and not system:
                 findings.append(
                     Finding(
                         DOMAIN,
@@ -65,6 +88,31 @@ def _analyze_pods(data: dict) -> list[Finding]:
                     )
                 )
     return findings
+
+
+def _check_rbac() -> list[Finding]:
+    bindings = _kubectl(["get", "clusterrolebindings", "-o", "json"])
+    if bindings is None:
+        return []
+    risky: list[str] = []
+    for b in bindings.get("items", []):
+        role = b.get("roleRef", {}).get("name", "")
+        if role in ("cluster-admin", "admin"):
+            subjects = b.get("subjects", []) or []
+            for s in subjects:
+                if s.get("kind") == "User" or s.get("kind") == "Group":
+                    risky.append(f"{s.get('kind')}/{s.get('name')}")
+    if not risky:
+        return []
+    return [
+        Finding(
+            DOMAIN,
+            "Broad cluster-admin/ admin RBAC binding",
+            Severity.high,
+            f"clusterrolebindings grant cluster-admin/admin to: {', '.join(risky)}",
+            "Scope bindings to least privilege; avoid cluster-admin for users/groups.",
+        )
+    ]
 
 
 def _check_network_policies() -> list[Finding]:
@@ -100,5 +148,6 @@ def check() -> ScanResult:
             ],
         )
     findings = _analyze_pods(pods)
+    findings += _check_rbac()
     findings += _check_network_policies()
     return ScanResult(DOMAIN, findings)
