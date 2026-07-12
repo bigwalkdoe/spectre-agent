@@ -15,10 +15,14 @@ Spectre Agent is **read-only by default**. It inspects and reports; it never cha
 ## Install
 
 ```bash
+make install          # creates .venv and installs dev dependencies
+# or manually:
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 ```
+
+Common tasks are wrapped by the Makefile: `make lint`, `make type`, `make test`, `make scan`.
 
 ## Usage
 

@@ -7,7 +7,7 @@ name = "spectre-agent"
 version = "0.1.0"
 description = "Infrastructure defender for Linux and Kubernetes hosts"
 requires-python = ">=3.11"
-dependencies = ["pydantic>=2.0"]
+dependencies = []
 
 [project.optional-dependencies]
 dev = ["ruff", "mypy", "pytest"]
