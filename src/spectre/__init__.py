@@ -4,6 +4,8 @@ from spectre import (
     firewall,
     kubernetes,
     linux_hardening,
+    remediation,
+    report,
     ssh_monitor,
 )
 
@@ -14,4 +16,6 @@ __all__ = [
     "firewall",
     "ssh_monitor",
     "container_security",
+    "remediation",
+    "report",
 ]
