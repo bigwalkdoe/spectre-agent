@@ -21,6 +21,7 @@ class Finding:
     evidence: str
     recommendation: str
     detail: str = ""
+    suppressed: bool = False
 
     def to_dict(self) -> dict[str, str]:
         return asdict(self)
@@ -33,11 +34,11 @@ class ScanResult:
 
     @property
     def critical(self) -> int:
-        return sum(1 for f in self.findings if f.severity == Severity.critical)
+        return sum(1 for f in self.findings if f.severity == Severity.critical and not f.suppressed)
 
     @property
     def high(self) -> int:
-        return sum(1 for f in self.findings if f.severity == Severity.high)
+        return sum(1 for f in self.findings if f.severity == Severity.high and not f.suppressed)
 
     def to_dict(self) -> dict:
         return {

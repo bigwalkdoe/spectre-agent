@@ -91,6 +91,30 @@ def _check_ssh() -> list[Finding]:
                 "Set 'PermitEmptyPasswords no'.",
             )
         )
+
+    max_auth = _ssh_setting("MaxAuthTries", cfg)
+    if max_auth is None or not max_auth.isdigit() or int(max_auth) > 4:
+        findings.append(
+            Finding(
+                DOMAIN,
+                "SSH MaxAuthTries too high",
+                Severity.low,
+                f"MaxAuthTries={max_auth or 'unset (defaults to 6)'}",
+                "Set 'MaxAuthTries 4' or fewer.",
+            )
+        )
+
+    alive = _ssh_setting("ClientAliveInterval", cfg)
+    if alive is None or not alive.isdigit() or int(alive) == 0 or int(alive) > 900:
+        findings.append(
+            Finding(
+                DOMAIN,
+                "SSH idle timeout not configured",
+                Severity.low,
+                f"ClientAliveInterval={alive or 'unset (defaults to 0 = never)'}",
+                "Set 'ClientAliveInterval 300' to disconnect idle sessions.",
+            )
+        )
     return findings
 
 

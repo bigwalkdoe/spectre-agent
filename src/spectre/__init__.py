@@ -7,6 +7,7 @@ from spectre import (
     remediation,
     report,
     ssh_monitor,
+    suppressions,
 )
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "container_security",
     "remediation",
     "report",
+    "suppressions",
 ]

@@ -12,6 +12,7 @@ from spectre import (
     remediation,
     report,
     ssh_monitor,
+    suppressions,
 )
 from spectre.findings import ScanResult
 
@@ -33,7 +34,8 @@ def _print_human(results: list[ScanResult]) -> None:
             print("  clean")
             continue
         for f in result.findings:
-            print(f"  [{f.severity}] {f.title}")
+            tag = " [suppressed]" if f.suppressed else ""
+            print(f"  [{f.severity}] {f.title}{tag}")
             print(f"     evidence: {f.evidence}")
             print(f"     fix:      {f.recommendation}")
 
@@ -70,6 +72,12 @@ def main(argv: list[str] | None = None) -> int:
         "--format", choices=["json", "md"], default="json", help="Report format"
     )
     parser.add_argument(
+        "--suppressions",
+        metavar="PATH",
+        default="config/suppressions.json",
+        help="Suppression/acknowledgement file (JSON)",
+    )
+    parser.add_argument(
         "--record", action="store_true", help="Append a run summary to memory/changelog.md"
     )
     parser.add_argument("--json", action="store_true", help="Emit JSON instead of text")
@@ -81,10 +89,17 @@ def main(argv: list[str] | None = None) -> int:
 
     results = _run_selected(domains)
 
+    supps = suppressions.load_suppressions(args.suppressions)
+    if supps:
+        results = suppressions.apply_suppressions(results, supps)
+
     if args.json:
         print("[" + ",".join(r.to_json() for r in results) + "]")
     else:
         _print_human(results)
+        suppressed = suppressions.count_suppressed(results)
+        if suppressed:
+            print(f"\n{suppressed} finding(s) suppressed via {args.suppressions}")
 
     if args.remediate:
         apply = args.apply
