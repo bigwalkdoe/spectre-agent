@@ -1,0 +1,76 @@
+name: Spectre Deploy
+description: Deploy a service with Spectre
+author: spectre
+
+inputs:
+  service:
+    description: Service name
+    required: true
+  environment:
+    description: Target environment
+    required: true
+  version:
+    description: Version tag (git sha or semver)
+    required: true
+  services-config:
+    description: Services config file path
+    required: false
+    default: config/services.toml
+  environments-config:
+    description: Environments config file path
+    required: false
+    default: config/environments.toml
+  strategy:
+    description: Deployment strategy (rolling, blue_green, canary)
+    required: false
+    default: ""
+  build-type:
+    description: Build type (docker, pip)
+    required: false
+    default: ""
+  deploy-type:
+    description: Deploy type (docker-compose, kubernetes)
+    required: false
+    default: ""
+  compose-file:
+    description: Docker compose file path
+    required: false
+    default: ""
+  health-url:
+    description: Health check URL
+    required: false
+    default: ""
+  work-dir:
+    description: Working directory
+    required: false
+    default: .
+
+runs:
+  using: composite
+  steps:
+    - name: Install Spectre
+      shell: bash
+      working-directory: ${{ inputs.work-dir }}
+      run: |
+        python -m venv .venv
+        .venv/bin/pip install -e ".[dev]"
+
+    - name: Deploy
+      shell: bash
+      working-directory: ${{ inputs.work-dir }}
+      run: |
+        ARGS="--ci"
+        [ -n "${{ inputs.strategy }}" ] && ARGS="$ARGS --strategy ${{ inputs.strategy }}"
+        [ -n "${{ inputs.build-type }}" ] && ARGS="$ARGS --build-type ${{ inputs.build-type }}"
+        [ -n "${{ inputs.deploy-type }}" ] && ARGS="$ARGS --deploy-type ${{ inputs.deploy-type }}"
+        [ -n "${{ inputs.compose-file }}" ] && ARGS="$ARGS --compose-file ${{ inputs.compose-file }}"
+        [ -n "${{ inputs.health-url }}" ] && ARGS="$ARGS --health-url ${{ inputs.health-url }}"
+        .venv/bin/spectre \
+          --services ${{ inputs.services-config }} \
+          --environments ${{ inputs.environments-config }} \
+          deploy ${{ inputs.service }} ${{ inputs.environment }} ${{ inputs.version }} \
+          $ARGS
+
+branding:
+  icon: upload-cloud
+  color: blue

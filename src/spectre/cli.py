@@ -1,18 +1,18 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 from spectre.config import resolve_environment, resolve_service
-from spectre.models import DeploymentStatus, Strategy
-from spectre.orchestrator import run
+from spectre.models import Deployment, DeploymentStatus, Strategy
+from spectre.orchestrator import run as run_deploy
 from spectre.report import record_run, write_report
 from spectre.rollback import rollback
 from spectre.state import list_deployments
 
 
 def _print_deployment(d: object, prefix: str = "") -> None:
-    from spectre.models import Deployment
     if not isinstance(d, Deployment):
         return
     icon = "✓" if d.status == DeploymentStatus.healthy else "✗"
@@ -23,6 +23,37 @@ def _print_deployment(d: object, prefix: str = "") -> None:
     for step in d.steps:
         step_icon = "✓" if step.status == DeploymentStatus.healthy else "✗"
         print(f"{prefix}   {step_icon} {step.stage}: {step.message} ({step.duration_ms}ms)")
+
+
+def _write_step_summary(deployment: Deployment) -> None:
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not summary_path:
+        return
+    lines = [
+        "## Spectre Deploy",
+        "",
+        "| Field | Value |",
+        "|---|---|",
+        f"| Service | `{deployment.service}` |",
+        f"| Environment | `{deployment.environment}` |",
+        f"| Version | `{deployment.version}` |",
+        f"| Status | `{deployment.status.value}` |",
+        f"| Duration | `{deployment.started_at}` → `{deployment.completed_at}` |",
+        "",
+        "### Steps",
+        "",
+    ]
+    for step in deployment.steps:
+        icon = ":white_check_mark:" if step.status == DeploymentStatus.healthy else ":x:"
+        lines.append(f"- {icon} **{step.stage}**: {step.message} ({step.duration_ms}ms)")
+        if step.detail:
+            lines.append(f"  - `{step.detail}`")
+    lines.append("")
+    try:
+        with open(summary_path, "a", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+    except OSError:
+        pass
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -56,6 +87,7 @@ def main(argv: list[str] | None = None) -> int:
     deploy_parser.add_argument("--dockerfile", default=None)
     deploy_parser.add_argument("--namespace", default=None)
     deploy_parser.add_argument("--kube-context", default=None)
+    deploy_parser.add_argument("--ci", action="store_true", help="CI mode (GitHub Actions output)")
     deploy_parser.add_argument("--report", metavar="PATH", help="Write deployment report")
     deploy_parser.add_argument(
         "--record", action="store_true", help="Append to memory/changelog.md"
@@ -92,7 +124,10 @@ def main(argv: list[str] | None = None) -> int:
 
         health_url = args.health_url or f"http://localhost:{service.port}{service.health_endpoint}"
 
-        deployment = run(
+        if args.ci:
+            print("::group::Spectre Deploy")
+
+        deployment = run_deploy(
             service=service.name,
             environment=env.name,
             version=args.version,
@@ -109,6 +144,15 @@ def main(argv: list[str] | None = None) -> int:
         )
         _print_deployment(deployment)
         print()
+
+        if args.ci:
+            _write_step_summary(deployment)
+            for step in deployment.steps:
+                if step.status == DeploymentStatus.failed:
+                    print(f"::error::[{step.stage}] {step.message}")
+                else:
+                    print(f"::notice::[{step.stage}] {step.message}")
+            print("::endgroup::")
 
         if args.report:
             path = write_report(deployment, args.report)
