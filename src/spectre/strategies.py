@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from spectre.checker import health_check
-from spectre.deployer import compose_stop, deploy
+from spectre.deployer import compose_stop, compose_stop_ssh, deploy
 from spectre.models import DeploymentStatus, Stage, StepResult, Strategy
 
 
@@ -20,10 +20,15 @@ def rolling(
     env_vars: dict[str, str] | None = None,
     registry: str = "",
     image_name: str = "",
+    hosts: list[str] | None = None,
+    ssh_user: str = "",
+    ssh_key: str = "",
+    ssh_port: int = 22,
 ) -> list[StepResult]:
     steps: list[StepResult] = []
     step = deploy(service, version, deploy_type, compose_file, namespace, kube_context, env_vars,
-                  registry=registry, image_name=image_name)
+                  registry=registry, image_name=image_name,
+                  hosts=hosts, ssh_user=ssh_user, ssh_key=ssh_key, ssh_port=ssh_port)
     steps.append(step)
     if not _healthy(step):
         return steps
@@ -43,10 +48,15 @@ def blue_green(
     env_vars: dict[str, str] | None = None,
     registry: str = "",
     image_name: str = "",
+    hosts: list[str] | None = None,
+    ssh_user: str = "",
+    ssh_key: str = "",
+    ssh_port: int = 22,
 ) -> list[StepResult]:
     steps: list[StepResult] = []
     step = deploy(service, version, deploy_type, compose_file, namespace, kube_context, env_vars,
-                  registry=registry, image_name=image_name)
+                  registry=registry, image_name=image_name,
+                  hosts=hosts, ssh_user=ssh_user, ssh_key=ssh_key, ssh_port=ssh_port)
     steps.append(step)
     if not _healthy(step):
         return steps
@@ -56,6 +66,9 @@ def blue_green(
         return steps
     if deploy_type == "docker-compose":
         step = compose_stop(service, compose_file)
+        steps.append(step)
+    elif deploy_type == "ssh":
+        step = compose_stop_ssh(service, compose_file, hosts, ssh_user, ssh_key, ssh_port)
         steps.append(step)
     else:
         steps.append(
@@ -79,10 +92,15 @@ def canary(
     env_vars: dict[str, str] | None = None,
     registry: str = "",
     image_name: str = "",
+    hosts: list[str] | None = None,
+    ssh_user: str = "",
+    ssh_key: str = "",
+    ssh_port: int = 22,
 ) -> list[StepResult]:
     steps: list[StepResult] = []
     step = deploy(service, version, deploy_type, compose_file, namespace, kube_context, env_vars,
-                  registry=registry, image_name=image_name)
+                  registry=registry, image_name=image_name,
+                  hosts=hosts, ssh_user=ssh_user, ssh_key=ssh_key, ssh_port=ssh_port)
     steps.append(step)
     if not _healthy(step):
         return steps
@@ -118,6 +136,10 @@ def run(
     env_vars: dict[str, str] | None = None,
     registry: str = "",
     image_name: str = "",
+    hosts: list[str] | None = None,
+    ssh_user: str = "",
+    ssh_key: str = "",
+    ssh_port: int = 22,
 ) -> list[StepResult]:
     if isinstance(strategy, str):
         try:
@@ -133,4 +155,8 @@ def run(
         env_vars=env_vars,
         registry=registry,
         image_name=image_name,
+        hosts=hosts,
+        ssh_user=ssh_user,
+        ssh_key=ssh_key,
+        ssh_port=ssh_port,
     )

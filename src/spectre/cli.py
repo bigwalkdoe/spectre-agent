@@ -79,8 +79,8 @@ def main(argv: list[str] | None = None) -> int:
     deploy_parser.add_argument("environment", help="Target environment")
     deploy_parser.add_argument("version", help="Version tag (git sha or semver)")
     deploy_parser.add_argument("--build-type", default=None, choices=["docker", "pip"])
-    choices = ["docker-compose", "kubernetes"]
-    deploy_parser.add_argument("--deploy-type", default=None, choices=choices)
+    deploy_choices = ["docker-compose", "kubernetes", "ssh"]
+    deploy_parser.add_argument("--deploy-type", default=None, choices=deploy_choices)
     strat_choices = [s.value for s in Strategy]
     deploy_parser.add_argument("--strategy", default=None, choices=strat_choices)
     deploy_parser.add_argument("--compose-file", default=None)
@@ -89,6 +89,9 @@ def main(argv: list[str] | None = None) -> int:
     deploy_parser.add_argument("--dockerfile", default=None)
     deploy_parser.add_argument("--namespace", default=None)
     deploy_parser.add_argument("--kube-context", default=None)
+    deploy_parser.add_argument("--ssh-user", default=None, help="SSH user for remote deploy")
+    deploy_parser.add_argument("--ssh-key", default=None, help="SSH private key path")
+    deploy_parser.add_argument("--ssh-port", type=int, default=None, help="SSH port (default: 22)")
     deploy_parser.add_argument(
         "--registry", default=None, help="Container registry (e.g., ghcr.io/org)"
     )
@@ -139,6 +142,9 @@ def main(argv: list[str] | None = None) -> int:
             "compose_file": args.compose_file,
             "kube_namespace": args.namespace,
             "kube_context": args.kube_context,
+            "ssh_user": args.ssh_user,
+            "ssh_key": args.ssh_key,
+            "ssh_port": args.ssh_port,
         }
         env = resolve_environment(args.environment, args.environments, env_overrides)
 
@@ -173,6 +179,10 @@ def main(argv: list[str] | None = None) -> int:
             image_name=service.image_name,
             push_image=service.push_image,
             force=args.force,
+            hosts=env.hosts,
+            ssh_user=env.ssh_user,
+            ssh_key=env.ssh_key,
+            ssh_port=env.ssh_port,
         )
         _print_deployment(deployment)
         print()

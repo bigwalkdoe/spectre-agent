@@ -71,6 +71,9 @@ class Environment:
     kube_context: str | None = None
     env_vars: dict[str, str] = field(default_factory=dict)
     secrets: dict[str, str] = field(default_factory=dict)
+    ssh_user: str = ""
+    ssh_key: str = ""
+    ssh_port: int = 22
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Environment:

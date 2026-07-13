@@ -46,6 +46,10 @@ def run(
     image_name: str = "",
     push_image: bool = False,
     force: bool = False,
+    hosts: list[str] | None = None,
+    ssh_user: str = "",
+    ssh_key: str = "",
+    ssh_port: int = 22,
 ) -> Deployment:
     deployment = Deployment(
         service=service,
@@ -110,6 +114,10 @@ def run(
             env_vars=env_vars,
             registry=registry,
             image_name=image_name,
+            hosts=hosts,
+            ssh_user=ssh_user,
+            ssh_key=ssh_key,
+            ssh_port=ssh_port,
         )
         deployment.steps.extend(strat_steps)
 
