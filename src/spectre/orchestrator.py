@@ -4,9 +4,13 @@ from datetime import UTC, datetime
 
 from spectre.builder import build, docker_push
 from spectre.checker import pre_check
+from spectre.lock import acquire as acquire_lock
+from spectre.lock import release as release_lock
 from spectre.models import (
     Deployment,
     DeploymentStatus,
+    Stage,
+    StepResult,
     Strategy,
 )
 from spectre.state import append_deployment
@@ -41,6 +45,7 @@ def run(
     registry: str = "",
     image_name: str = "",
     push_image: bool = False,
+    force: bool = False,
 ) -> Deployment:
     deployment = Deployment(
         service=service,
@@ -50,27 +55,23 @@ def run(
         started_at=_now(),
     )
 
-    step = pre_check(service, build_context)
-    deployment.steps.append(step)
-    if step.status != DeploymentStatus.healthy:
-        deployment.status = DeploymentStatus.failed
-        deployment.completed_at = _now()
-        append_deployment(deployment)
-        return deployment
+    if not force:
+        lock_err = acquire_lock(service, environment, version)
+        if lock_err:
+            deployment.steps.append(
+                StepResult(
+                    stage=Stage.pre_check,
+                    status=DeploymentStatus.failed,
+                    message=f"lock: {lock_err}",
+                )
+            )
+            deployment.status = DeploymentStatus.failed
+            deployment.completed_at = _now()
+            append_deployment(deployment)
+            return deployment
 
-    deployment.status = DeploymentStatus.building
-    step = build(service, version, build_type, context=build_context, dockerfile=dockerfile,
-                 registry=registry, image_name=image_name)
-    deployment.steps.append(step)
-    if step.status != DeploymentStatus.healthy:
-        deployment.status = DeploymentStatus.failed
-        deployment.completed_at = _now()
-        append_deployment(deployment)
-        return deployment
-
-    if push_image and build_type == "docker":
-        tag = _image_tag(service, version, registry, image_name)
-        step = docker_push(tag)
+    try:
+        step = pre_check(service, build_context)
         deployment.steps.append(step)
         if step.status != DeploymentStatus.healthy:
             deployment.status = DeploymentStatus.failed
@@ -78,28 +79,51 @@ def run(
             append_deployment(deployment)
             return deployment
 
-    deployment.status = DeploymentStatus.deploying
-    strategy_enum = Strategy(strategy)
+        deployment.status = DeploymentStatus.building
+        step = build(service, version, build_type, context=build_context, dockerfile=dockerfile,
+                     registry=registry, image_name=image_name)
+        deployment.steps.append(step)
+        if step.status != DeploymentStatus.healthy:
+            deployment.status = DeploymentStatus.failed
+            deployment.completed_at = _now()
+            append_deployment(deployment)
+            return deployment
 
-    strat_steps = run_strategy(
-        strategy_enum, service, version, deploy_type, health_url,
-        compose_file=compose_file,
-        namespace=namespace,
-        kube_context=kube_context,
-        env_vars=env_vars,
-        registry=registry,
-        image_name=image_name,
-    )
-    deployment.steps.extend(strat_steps)
+        if push_image and build_type == "docker":
+            tag = _image_tag(service, version, registry, image_name)
+            step = docker_push(tag)
+            deployment.steps.append(step)
+            if step.status != DeploymentStatus.healthy:
+                deployment.status = DeploymentStatus.failed
+                deployment.completed_at = _now()
+                append_deployment(deployment)
+                return deployment
 
-    failed = any(s.status != DeploymentStatus.healthy for s in strat_steps)
-    if failed:
-        deployment.status = DeploymentStatus.failed
+        deployment.status = DeploymentStatus.deploying
+        strategy_enum = Strategy(strategy)
+
+        strat_steps = run_strategy(
+            strategy_enum, service, version, deploy_type, health_url,
+            compose_file=compose_file,
+            namespace=namespace,
+            kube_context=kube_context,
+            env_vars=env_vars,
+            registry=registry,
+            image_name=image_name,
+        )
+        deployment.steps.extend(strat_steps)
+
+        failed = any(s.status != DeploymentStatus.healthy for s in strat_steps)
+        if failed:
+            deployment.status = DeploymentStatus.failed
+            deployment.completed_at = _now()
+            append_deployment(deployment)
+            return deployment
+
+        deployment.status = DeploymentStatus.healthy
         deployment.completed_at = _now()
         append_deployment(deployment)
         return deployment
-
-    deployment.status = DeploymentStatus.healthy
-    deployment.completed_at = _now()
-    append_deployment(deployment)
-    return deployment
+    finally:
+        if not force:
+            release_lock(service, environment)

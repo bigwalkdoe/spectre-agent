@@ -74,6 +74,18 @@ def test_ci_flag_writes_summary(tmp_path: Path, monkeypatch: object) -> None:
     assert "built" in content
 
 
+def test_force_flag_accepted(tmp_path: Path) -> None:
+    with patch("spectre.state._STATE_DIR", tmp_path / ".spectre"), \
+         patch("spectre.cli.run_deploy") as mock_run:
+        from spectre.models import Deployment, DeploymentStatus
+        mock_run.return_value = Deployment(
+            service="api", environment="staging", version="v1",
+            status=DeploymentStatus.healthy,
+        )
+        rc = main(["deploy", "api", "staging", "v1", "--force"])
+    assert rc == 0
+
+
 def test_deploy_failure_exit_code(tmp_path: Path) -> None:
     with patch("spectre.state._STATE_DIR", tmp_path / ".spectre"), \
          patch("spectre.cli.run_deploy") as mock_run:

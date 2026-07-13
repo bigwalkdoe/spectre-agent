@@ -4,6 +4,7 @@ from spectre import (
     cli,
     config,
     deployer,
+    lock,
     models,
     orchestrator,
     report,
@@ -15,6 +16,7 @@ from spectre import (
 __all__ = [
     "cli",
     "config",
+    "lock",
     "models",
     "orchestrator",
     "builder",

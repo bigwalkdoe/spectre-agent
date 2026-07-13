@@ -93,6 +93,7 @@ def main(argv: list[str] | None = None) -> int:
     deploy_parser.add_argument(
         "--push", action="store_true", help="Push image to registry after build"
     )
+    deploy_parser.add_argument("--force", action="store_true", help="Bypass deployment lock")
     deploy_parser.add_argument("--ci", action="store_true", help="CI mode (GitHub Actions output)")
     deploy_parser.add_argument("--report", metavar="PATH", help="Write deployment report")
     deploy_parser.add_argument(
@@ -153,6 +154,7 @@ def main(argv: list[str] | None = None) -> int:
             registry=service.registry,
             image_name=service.image_name,
             push_image=service.push_image,
+            force=args.force,
         )
         _print_deployment(deployment)
         print()

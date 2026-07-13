@@ -48,6 +48,10 @@ inputs:
     description: Push image to registry after build
     required: false
     default: "false"
+  force:
+    description: Bypass deployment lock
+    required: false
+    default: "false"
   work-dir:
     description: Working directory
     required: false
@@ -75,6 +79,7 @@ runs:
         [ -n "${{ inputs.health-url }}" ] && ARGS="$ARGS --health-url ${{ inputs.health-url }}"
         [ -n "${{ inputs.registry }}" ] && ARGS="$ARGS --registry ${{ inputs.registry }}"
         [ "${{ inputs.push }}" = "true" ] && ARGS="$ARGS --push"
+        [ "${{ inputs.force }}" = "true" ] && ARGS="$ARGS --force"
         .venv/bin/spectre \
           --services ${{ inputs.services-config }} \
           --environments ${{ inputs.environments-config }} \
