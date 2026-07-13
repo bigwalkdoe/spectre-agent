@@ -1,126 +1,122 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 
-from spectre import (
-    container_security,
-    firewall,
-    kubernetes,
-    linux_hardening,
-    remediation,
-    report,
-    ssh_monitor,
-    suppressions,
-)
-from spectre.findings import ScanResult
-
-SCANS = {
-    "linux": linux_hardening.check,
-    "kubernetes": kubernetes.check,
-    "firewall": firewall.check,
-    "ssh": ssh_monitor.check,
-    "containers": container_security.check,
-}
-
-_ORDER = ["linux", "kubernetes", "firewall", "ssh", "containers"]
+from spectre.models import DeploymentStatus
+from spectre.orchestrator import run
+from spectre.report import record_run, write_report
+from spectre.rollback import rollback
+from spectre.state import list_deployments
 
 
-def _print_human(results: list[ScanResult]) -> None:
-    for result in results:
-        print(f"\n=== {result.domain} ===")
-        if not result.findings:
-            print("  clean")
-            continue
-        for f in result.findings:
-            tag = " [suppressed]" if f.suppressed else ""
-            print(f"  [{f.severity}] {f.title}{tag}")
-            print(f"     evidence: {f.evidence}")
-            print(f"     fix:      {f.recommendation}")
-
-
-def _print_remediation(results: list[ScanResult], apply: bool) -> None:
-    print("\n=== remediation (read-only audit by default) ===")
-    if not apply:
-        print("  dry-run: no system state changed. Use --apply to write changes.")
-    for result in results:
-        for r in remediation.remediate(result, apply):
-            print(f"  [{r.status}] {r.domain}: {r.title}")
-            print(f"     {r.detail}")
-
-
-def _run_selected(domains: list[str]) -> list[ScanResult]:
-    return [SCANS[d]() for d in domains]
+def _print_deployment(d: object, prefix: str = "") -> None:
+    from spectre.models import Deployment
+    if not isinstance(d, Deployment):
+        return
+    icon = "✓" if d.status == DeploymentStatus.healthy else "✗"
+    print(f"{prefix}{icon} {d.service}/{d.environment} {d.version} [{d.status.value}]")
+    print(f"{prefix}   started: {d.started_at}")
+    if d.completed_at:
+        print(f"{prefix}   completed: {d.completed_at}")
+    for step in d.steps:
+        step_icon = "✓" if step.status == DeploymentStatus.healthy else "✗"
+        print(f"{prefix}   {step_icon} {step.stage}: {step.message} ({step.duration_ms}ms)")
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="spectre", description="Spectre Agent infrastructure defender"
+        prog="spectre",
+        description="Spectre Agent — deployment orchestrator",
     )
-    parser.add_argument("--all", action="store_true", help="Run every domain scan")
-    for name in _ORDER:
-        parser.add_argument(f"--{name}", action="store_true", help=f"Scan the {name} domain")
-    parser.add_argument(
-        "--remediate", action="store_true", help="Show/safe-apply fixes for findings"
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    deploy_parser = sub.add_parser("deploy", help="Deploy a service")
+    deploy_parser.add_argument("service", help="Service name")
+    deploy_parser.add_argument("environment", help="Target environment")
+    deploy_parser.add_argument("version", help="Version tag (git sha or semver)")
+    deploy_parser.add_argument("--build-type", default="docker", choices=["docker", "pip"])
+    choices = ["docker-compose", "kubernetes"]
+    deploy_parser.add_argument("--deploy-type", default="docker-compose", choices=choices)
+    deploy_parser.add_argument("--compose-file", default="docker-compose.yml")
+    deploy_parser.add_argument("--health-url", default="http://localhost:8000/health")
+    deploy_parser.add_argument("--build-context", default=".")
+    deploy_parser.add_argument("--dockerfile", default="Dockerfile")
+    deploy_parser.add_argument("--namespace", default=None)
+    deploy_parser.add_argument("--kube-context", default=None)
+    deploy_parser.add_argument("--report", metavar="PATH", help="Write deployment report")
+    deploy_parser.add_argument(
+        "--record", action="store_true", help="Append to memory/changelog.md"
     )
-    parser.add_argument(
-        "--apply", action="store_true", help="Write changes (requires --remediate)"
-    )
-    parser.add_argument("--report", metavar="PATH", help="Write a report to PATH")
-    parser.add_argument(
-        "--format", choices=["json", "md"], default="json", help="Report format"
-    )
-    parser.add_argument(
-        "--suppressions",
-        metavar="PATH",
-        default="config/suppressions.json",
-        help="Suppression/acknowledgement file (JSON)",
-    )
-    parser.add_argument(
-        "--record", action="store_true", help="Append a run summary to memory/changelog.md"
-    )
-    parser.add_argument("--json", action="store_true", help="Emit JSON instead of text")
+
+    sub.add_parser("status", help="Show current deployment status")
+
+    list_parser = sub.add_parser("list", help="List deployments")
+    list_parser.add_argument("--service", default=None, help="Filter by service")
+    list_parser.add_argument("--environment", default=None, help="Filter by environment")
+
+    rollback_parser = sub.add_parser("rollback", help="Rollback a service")
+    rollback_parser.add_argument("service", help="Service name")
+    rollback_parser.add_argument("environment", help="Target environment")
+
     args = parser.parse_args(argv)
 
-    domains = [d for d in _ORDER if getattr(args, d)]
-    if args.all or not domains:
-        domains = _ORDER
+    if args.command == "deploy":
+        deployment = run(
+            service=args.service,
+            environment=args.environment,
+            version=args.version,
+            build_type=args.build_type,
+            deploy_type=args.deploy_type,
+            compose_file=args.compose_file,
+            health_url=args.health_url,
+            build_context=args.build_context,
+            dockerfile=args.dockerfile,
+            namespace=args.namespace,
+            kube_context=args.kube_context,
+        )
+        _print_deployment(deployment)
+        print()
 
-    results = _run_selected(domains)
+        if args.report:
+            path = write_report(deployment, args.report)
+            print(f"report written: {path}")
 
-    supps = suppressions.load_suppressions(args.suppressions)
-    if supps:
-        results = suppressions.apply_suppressions(results, supps)
+        if args.record:
+            path = record_run(deployment)
+            print(f"run recorded: {path}")
 
-    if args.json:
-        print("[" + ",".join(r.to_json() for r in results) + "]")
-    else:
-        _print_human(results)
-        suppressed = suppressions.count_suppressed(results)
-        if suppressed:
-            print(f"\n{suppressed} finding(s) suppressed via {args.suppressions}")
+        return 1 if deployment.status == DeploymentStatus.failed else 0
 
-    if args.remediate:
-        apply = args.apply
-        if args.json:
-            rem = [remediation.remediate(r, apply) for r in results]
-            flat = [item.to_dict() for res in rem for item in res]
-            print("\n" + json.dumps({"remediation": flat}, indent=2))
-        else:
-            _print_remediation(results, apply)
+    elif args.command == "status":
+        deployments = list_deployments()
+        if not deployments:
+            print("no deployments recorded")
+            return 0
+        latest = deployments[0]
+        print(f"current deployment: {latest.service}/{latest.environment}")
+        _print_deployment(latest)
+        return 0
 
-    if args.report:
-        written = report.write_report(results, args.report, args.format)
-        print(f"report written: {written}")
+    elif args.command == "list":
+        deployments = list_deployments(args.service, args.environment)
+        if not deployments:
+            print("no deployments found")
+            return 0
+        for d in deployments:
+            _print_deployment(d, prefix="  ")
+            print()
+        return 0
 
-    if args.record:
-        recorded = report.record_run(results)
-        print(f"run recorded: {recorded}")
+    elif args.command == "rollback":
+        results = rollback(args.service, args.environment)
+        for r in results:
+            icon = "✓" if r.status == DeploymentStatus.healthy else "✗"
+            print(f"{icon} {r.stage}: {r.message}")
+        failed = any(r.status == DeploymentStatus.failed for r in results)
+        return 1 if failed else 0
 
-    critical = sum(r.critical for r in results)
-    high = sum(r.high for r in results)
-    return 1 if (critical or high) else 0
+    return 0
 
 
 if __name__ == "__main__":

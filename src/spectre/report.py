@@ -1,67 +1,67 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-from spectre.findings import ScanResult, Severity
+from spectre.models import Deployment, DeploymentStatus
 
 
-def render_json(results: list[ScanResult]) -> str:
-    return "[" + ",".join(r.to_json() for r in results) + "]"
+def render_json(deployment: Deployment) -> str:
+    return json.dumps(deployment.to_dict(), indent=2)
 
 
-def render_markdown(results: list[ScanResult]) -> str:
-    lines = ["# Spectre Agent Scan Report", ""]
-    total_crit = total_high = 0
-    for result in results:
-        total_crit += result.critical
-        total_high += result.high
-        lines.append(f"## {result.domain}")
+def render_markdown(deployment: Deployment) -> str:
+    lines = [
+        f"# Deployment: {deployment.service}",
+        "",
+        f"- **service**: {deployment.service}",
+        f"- **environment**: {deployment.environment}",
+        f"- **version**: {deployment.version}",
+        f"- **status**: {deployment.status.value}",
+        f"- **started**: {deployment.started_at}",
+        f"- **completed**: {deployment.completed_at}",
+        "",
+        "## Steps",
+        "",
+    ]
+    for step in deployment.steps:
+        icon = "✓" if step.status == DeploymentStatus.healthy else "✗"
+        lines.append(f"- {icon} **{step.stage}**: {step.message}")
+        if step.detail:
+            lines.append(f"  - detail: {step.detail}")
+        lines.append(f"  - duration: {step.duration_ms}ms")
         lines.append("")
-        lines.append(f"- critical: {result.critical}")
-        lines.append(f"- high: {result.high}")
-        lines.append(f"- total: {len(result.findings)}")
-        lines.append("")
-        if not result.findings:
-            lines.append("_clean_")
-            lines.append("")
-            continue
-        for f in result.findings:
-            lines.append(f"- **[{f.severity}]** {f.title}")
-            lines.append(f"  - evidence: {f.evidence}")
-            lines.append(f"  - fix: {f.recommendation}")
-        lines.append("")
-    lines.append("--- ")
-    lines.append(f"Totals: {total_crit} critical, {total_high} high across {len(results)} domains.")
     return "\n".join(lines)
 
 
-def write_report(results: list[ScanResult], path: str, fmt: str = "json") -> Path:
+def write_report(deployment: Deployment, path: str, fmt: str = "json") -> Path:
     target = Path(path)
-    rendered = render_json(results) if fmt == "json" else render_markdown(results)
+    rendered = render_json(deployment) if fmt == "json" else render_markdown(deployment)
     target.write_text(rendered + "\n", encoding="utf-8")
     return target
 
 
-def _summary_line(results: list[ScanResult]) -> str:
-    crit = sum(r.critical for r in results)
-    high = sum(r.high for r in results)
-    return f"- scan: {crit} critical, {high} high across {len(results)} domains"
-
-
-def record_run(results: list[ScanResult], path: str = "memory/changelog.md") -> Path:
+def record_run(deployment: Deployment, path: str = "memory/changelog.md") -> Path:
     target = Path(path)
-    stamp = datetime.now(UTC).strftime("%Y-%m-%d")
-    block = [f"\n## Scan {stamp}", ""]
-    block.append(_summary_line(results))
-    for result in results:
-        if not result.findings:
-            continue
-        block.append(f"  - {result.domain}: {len(result.findings)} finding(s)")
-        for f in result.findings:
-            if f.severity in (Severity.critical, Severity.high):
-                block.append(f"    - [{f.severity}] {f.title}")
-    block.append("")
+    stamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
+    block = [
+        f"\n## Deploy {stamp}",
+        "",
+        f"- **service**: {deployment.service}",
+        f"- **environment**: {deployment.environment}",
+        f"- **version**: {deployment.version}",
+        f"- **status**: {deployment.status.value}",
+        "",
+    ]
+    failed = [s for s in deployment.steps if s.status == DeploymentStatus.failed]
+    if failed:
+        block.append("### Failed Steps")
+        block.append("")
+        for step in failed:
+            block.append(f"- {step.stage}: {step.message}")
+        block.append("")
+
     existing = target.read_text(encoding="utf-8") if target.is_file() else ""
     target.write_text(existing + "\n".join(block), encoding="utf-8")
     return target

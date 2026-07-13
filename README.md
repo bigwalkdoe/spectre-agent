@@ -1,61 +1,52 @@
 # Spectre Agent
 
-An infrastructure defender for Linux and Kubernetes hosts. Spectre Agent audits, hardens, and monitors the attack surface across five domains:
+Deployment orchestrator for containerized services. Pre-checks, builds, deploys, health-checks, and tracks deployments across environments.
 
-| Domain | What it does |
-| --- | --- |
-| Linux Hardening | CIS-aligned checks for SSH, boot, updates, and system config |
-| Kubernetes | Pod security context, network policy, RBAC, image posture |
-| Firewall Analysis | Inspects iptables/nftables/ufw and flags open exposure |
-| SSH Monitoring | Detects brute-force and unauthorized access from auth logs |
-| Container Security | Scans images for root users, privileged mode, mounts, stale tags |
-
-Spectre Agent is **read-only by default**. It inspects and reports; it never changes system state unless you explicitly ask it to remediate.
-
-## Install
+## Quickstart
 
 ```bash
-make install          # creates .venv and installs dev dependencies
-# or manually:
-python -m venv .venv
-source .venv/bin/activate
 pip install -e ".[dev]"
+
+# Deploy a service
+spectre deploy my-api staging v1.2.3
+
+# Deploy with build/deploy options
+spectre deploy my-api staging v1.2.3 \
+  --build-type docker \
+  --deploy-type docker-compose \
+  --health-url http://localhost:8000/health
+
+# Record in changelog
+spectre deploy my-api staging $(git rev-parse --short HEAD) --record
+
+# View status
+spectre status
+
+# List deployments
+spectre list
+
+# Rollback
+spectre rollback my-api staging
 ```
 
-Common tasks are wrapped by the Makefile: `make lint`, `make type`, `make test`, `make scan`.
+## Architecture
 
-## Usage
-
-```bash
-# Run every audit
-spectre --all
-
-# Target a single domain
-spectre --linux
-spectre --kubernetes
-spectre --firewall
-spectre --ssh
-spectre --containers
-
-# Machine-readable output
-spectre --all --json
+```
+spectre deploy <service> <env> <version>
+  │
+  ├── 1. pre_check     git clean? tools available?
+  ├── 2. build         docker build / pip install
+  ├── 3. deploy        docker compose up / kubectl set image
+  ├── 4. health_check  HTTP GET /health with retry
+  └── 5. record        append to .spectre/deployments.json
 ```
 
-Each domain is implemented as a module under `src/spectre/` and can be imported and run programmatically:
+Each stage runs sequentially. If any stage fails, the deployment is marked `failed` and stops immediately.
 
-```python
-from spectre import linux_hardening
+## State
 
-findings = linux_hardening.check()
-for f in findings:
-    print(f.severity, f.title, f.evidence)
-```
+Deployment history is stored in `.spectre/deployments.json`. This file tracks every deployment with per-step results and timing.
 
-## Principles
+## Configuration
 
-- Audit first, remediate only on request.
-- Every finding cites its evidence (command, file, or source).
-- Missing tooling is reported as a gap — never assumed secure.
-- No secrets, keys, or tokens in output.
-
-See `AGENTS.md` for operating instructions and `playbooks/` for response runbooks.
+Service and environment definitions go in `config/services.yaml` and `config/environments.yaml`. See `config/` for examples.

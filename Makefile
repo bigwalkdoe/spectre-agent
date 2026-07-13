@@ -1,4 +1,4 @@
-.PHONY: install lint type test scan
+.PHONY: install lint type test
 
 install:
 	python -m venv .venv
@@ -12,6 +12,3 @@ type:
 
 test:
 	.venv/bin/pytest
-
-scan:
-	.venv/bin/spectre --all

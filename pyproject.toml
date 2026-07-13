@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "spectre-agent"
-version = "0.1.0"
-description = "Infrastructure defender for Linux and Kubernetes hosts"
+version = "0.2.0"
+description = "Deployment orchestrator for containerized services"
 requires-python = ">=3.11"
 dependencies = []
 
@@ -14,6 +14,10 @@ dev = ["ruff", "mypy", "pytest"]
 
 [project.scripts]
 spectre = "spectre.cli:main"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/spectre"]

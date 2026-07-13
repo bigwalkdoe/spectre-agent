@@ -1,51 +1,39 @@
 # Spectre Agent
 
-Spectre Agent is an infrastructure defender for Linux and Kubernetes hosts. It audits, hardens, and monitors the attack surface across five domains:
-
-- **Linux Hardening** — CIS-aligned checks for SSH, boot, updates, and system configuration.
-- **Kubernetes** — Pod security context, network policy, RBAC, and image posture analysis.
-- **Firewall Analysis** — Inspects iptables/nftables/ufw policy and flags open exposure.
-- **SSH Monitoring** — Detects brute-force and unauthorized access attempts from auth logs.
-- **Container Security** — Scans images for root users, privileged mode, dangerous mounts, and stale tags.
+Spectre Agent is a deployment orchestrator for containerized services. It deploys, monitors, and rollbacks services across environments.
 
 ## Operating Principles
 
-1. **Read-only by default** — Audit and report. Never mutate system state unless explicitly told to remediate.
-2. **Defense in depth** — Report every gap; prioritize by exploitability, not by count.
-3. **Evidence over assertions** — Every finding cites the command, file, or source that produced it.
-4. **Fail safe** — If a tool (kubectl, podman, ufw) is missing, report the gap; do not assume secure.
-5. **No secrets in output** — Redact keys, tokens, and private material from logs and reports.
-6. **Security first** — Never log or commit credentials.
-
-## Task Lifecycle
-
-```
-Scope -> Inspect -> Analyze -> Report -> (Remediate on request) -> Record
-```
+1. **Sequential stages** — Every deployment runs through pre-check → build → deploy → health-check → record in order.
+2. **Fail fast** — A failed stage stops the deployment immediately; no partial state.
+3. **Stateful** — Deployment history is persisted in `.spectre/deployments.json`.
+4. **Read-only default** — CLI reports status and history without side effects. Only `deploy` and `rollback` mutate state.
 
 ## Structure
 
 ```
 spectre-agent/
-├── AGENTS.md              # This file: operating instructions
+├── AGENTS.md              # This file
 ├── README.md              # Overview and usage
-├── pyproject.toml         # Packaging, ruff, mypy
-├── src/spectre/           # Capability modules
-│   ├── cli.py             # Entrypoint / dispatcher
-│   ├── linux_hardening.py
-│   ├── kubernetes.py
-│   ├── firewall.py
-│   ├── ssh_monitor.py
-│   └── container_security.py
-├── config/                # Baselines and benchmarks
-├── knowledge/             # Domain reference
-├── playbooks/             # Defender runbooks
+├── pyproject.toml
+├── src/spectre/
+│   ├── cli.py             # CLI entrypoint (deploy, rollback, status, list)
+│   ├── models.py          # Dataclasses (Deployment, Stage, StepResult)
+│   ├── orchestrator.py    # Deployment pipeline orchestrator
+│   ├── builder.py         # Build service artifacts (docker, pip)
+│   ├── deployer.py        # Deploy to environments (compose, kubectl)
+│   ├── checker.py         # Pre-deploy and health checks
+│   ├── rollback.py        # Rollback to previous version
+│   ├── state.py           # Deployment state persistence
+│   └── report.py          # Reports and changelog recording
+├── config/                # Service and environment definitions
+├── playbooks/             # Deployment runbooks
 ├── scripts/               # Helper automation
-└── memory/                # Decisions and changelog
+└── memory/                # Changelog and decisions
 ```
 
 ## Standards
 
-- Python 3.11+, ruff (lint/format), mypy (types), pytest (tests)
-- Structured findings via dataclasses; machine-readable JSON output support
-- Run as an unprivileged user; escalate only the checks that require root
+- Python 3.11+, ruff (lint), mypy (types), pytest (tests)
+- Structured state via dataclasses; JSON persistence for deployment history
+- No external dependencies in the core library
