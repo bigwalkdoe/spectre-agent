@@ -1,31 +1,43 @@
-# Deployment Configurations
+# Deployment Configuration
 
-Service and environment definitions for the orchestrator.
+Service and environment definitions live in TOML files under `config/`.
 
-## Services
+## Services (`config/services.toml`)
 
-```yaml
-services:
-  my-api:
-    build_type: docker
-    deploy_type: docker-compose
-    build_context: .
-    dockerfile: Dockerfile
-    health_endpoint: /health
-    port: 8000
+```toml
+[api]
+build_type = "docker"
+deploy_type = "docker-compose"
+build_context = "."
+dockerfile = "Dockerfile"
+health_endpoint = "/health"
+port = 8000
+
+[worker]
+build_type = "docker"
+deploy_type = "kubernetes"
+build_context = "./worker"
 ```
 
-## Environments
+## Environments (`config/environments.toml`)
 
-```yaml
-environments:
-  staging:
-    compose_file: docker-compose.yml
-    hosts:
-      - localhost
-  production:
-    compose_file: docker-compose.prod.yml
-    hosts:
-      - app1.example.com
-      - app2.example.com
+```toml
+[staging]
+compose_file = "docker-compose.yml"
+
+[production]
+compose_file = "docker-compose.prod.yml"
+kube_namespace = "production"
+kube_context = "prod-cluster"
+
+[development]
+compose_file = "docker-compose.override.yml"
+```
+
+## CLI overrides
+
+CLI flags override config values when both are provided:
+
+```bash
+spectre deploy api staging v2 --build-type pip --health-url http://localhost:9000/health
 ```

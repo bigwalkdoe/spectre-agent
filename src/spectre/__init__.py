@@ -2,6 +2,7 @@ from spectre import (
     builder,
     checker,
     cli,
+    config,
     deployer,
     models,
     orchestrator,
@@ -12,6 +13,7 @@ from spectre import (
 
 __all__ = [
     "cli",
+    "config",
     "models",
     "orchestrator",
     "builder",

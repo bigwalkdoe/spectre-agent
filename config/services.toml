@@ -1,0 +1,14 @@
+[api]
+build_type = "docker"
+deploy_type = "docker-compose"
+build_context = "."
+dockerfile = "Dockerfile"
+health_endpoint = "/health"
+port = 8000
+
+[worker]
+build_type = "docker"
+deploy_type = "kubernetes"
+build_context = "./worker"
+health_endpoint = "/healthz"
+port = 8080

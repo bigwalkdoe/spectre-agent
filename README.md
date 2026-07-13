@@ -1,4 +1,4 @@
-# Spectre Agent
+# Spectre
 
 Deployment orchestrator for containerized services. Pre-checks, builds, deploys, health-checks, and tracks deployments across environments.
 
@@ -7,17 +7,14 @@ Deployment orchestrator for containerized services. Pre-checks, builds, deploys,
 ```bash
 pip install -e ".[dev]"
 
-# Deploy a service
-spectre deploy my-api staging v1.2.3
+# Deploy a service (uses config/services.toml and config/environments.toml)
+spectre deploy api staging v1.2.3
 
-# Deploy with build/deploy options
-spectre deploy my-api staging v1.2.3 \
-  --build-type docker \
-  --deploy-type docker-compose \
-  --health-url http://localhost:8000/health
+# Override config values with CLI flags
+spectre deploy api staging v1.2.3 --build-type pip --health-url http://localhost:9000/health
 
-# Record in changelog
-spectre deploy my-api staging $(git rev-parse --short HEAD) --record
+# Record the deploy in the changelog
+spectre deploy api staging $(git rev-parse --short HEAD) --record
 
 # View status
 spectre status
@@ -26,27 +23,47 @@ spectre status
 spectre list
 
 # Rollback
-spectre rollback my-api staging
+spectre rollback api staging
 ```
 
-## Architecture
+## Pipeline
 
 ```
 spectre deploy <service> <env> <version>
   │
-  ├── 1. pre_check     git clean? tools available?
+  ├── 1. pre_check     git clean? docker available?
   ├── 2. build         docker build / pip install
   ├── 3. deploy        docker compose up / kubectl set image
-  ├── 4. health_check  HTTP GET /health with retry
+  ├── 4. health_check  HTTP GET health endpoint with retry
   └── 5. record        append to .spectre/deployments.json
 ```
 
-Each stage runs sequentially. If any stage fails, the deployment is marked `failed` and stops immediately.
-
-## State
-
-Deployment history is stored in `.spectre/deployments.json`. This file tracks every deployment with per-step results and timing.
+Each stage runs sequentially. A failure stops the deployment immediately.
 
 ## Configuration
 
-Service and environment definitions go in `config/services.yaml` and `config/environments.yaml`. See `config/` for examples.
+Service definitions go in `config/services.toml`, environments in `config/environments.toml`:
+
+```toml
+# config/services.toml
+[api]
+build_type = "docker"
+deploy_type = "docker-compose"
+port = 8000
+```
+
+```toml
+# config/environments.toml
+[staging]
+compose_file = "docker-compose.yml"
+
+[production]
+compose_file = "docker-compose.prod.yml"
+kube_namespace = "production"
+```
+
+Custom config paths can be specified with `--services` and `--environments`.
+
+## State
+
+Deployment history is persisted in `.spectre/deployments.json`.

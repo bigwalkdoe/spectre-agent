@@ -19,6 +19,7 @@ spectre/
 ├── src/spectre/
 │   ├── cli.py             # CLI entrypoint (deploy, rollback, status, list)
 │   ├── models.py          # Dataclasses (Deployment, Stage, StepResult)
+│   ├── config.py          # Load service/env configs from TOML/JSON files
 │   ├── orchestrator.py    # Deployment pipeline orchestrator
 │   ├── builder.py         # Build service artifacts (docker, pip)
 │   ├── deployer.py        # Deploy to environments (compose, kubectl)

@@ -1,0 +1,10 @@
+[staging]
+compose_file = "docker-compose.yml"
+
+[production]
+compose_file = "docker-compose.prod.yml"
+kube_namespace = "production"
+kube_context = "prod-cluster"
+
+[development]
+compose_file = "docker-compose.override.yml"

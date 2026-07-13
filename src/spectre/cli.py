@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import sys
 
+from spectre.config import resolve_environment, resolve_service
 from spectre.models import DeploymentStatus
 from spectre.orchestrator import run
 from spectre.report import record_run, write_report
@@ -27,21 +28,30 @@ def _print_deployment(d: object, prefix: str = "") -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="spectre",
-        description="Spectre Agent — deployment orchestrator",
+        description="Spectre — deployment orchestrator",
     )
+    parser.add_argument(
+        "--services", default="config/services.toml",
+        help="Services config file (TOML or JSON)",
+    )
+    parser.add_argument(
+        "--environments", default="config/environments.toml",
+        help="Environments config file (TOML or JSON)",
+    )
+
     sub = parser.add_subparsers(dest="command", required=True)
 
     deploy_parser = sub.add_parser("deploy", help="Deploy a service")
     deploy_parser.add_argument("service", help="Service name")
     deploy_parser.add_argument("environment", help="Target environment")
     deploy_parser.add_argument("version", help="Version tag (git sha or semver)")
-    deploy_parser.add_argument("--build-type", default="docker", choices=["docker", "pip"])
+    deploy_parser.add_argument("--build-type", default=None, choices=["docker", "pip"])
     choices = ["docker-compose", "kubernetes"]
-    deploy_parser.add_argument("--deploy-type", default="docker-compose", choices=choices)
-    deploy_parser.add_argument("--compose-file", default="docker-compose.yml")
-    deploy_parser.add_argument("--health-url", default="http://localhost:8000/health")
-    deploy_parser.add_argument("--build-context", default=".")
-    deploy_parser.add_argument("--dockerfile", default="Dockerfile")
+    deploy_parser.add_argument("--deploy-type", default=None, choices=choices)
+    deploy_parser.add_argument("--compose-file", default=None)
+    deploy_parser.add_argument("--health-url", default=None)
+    deploy_parser.add_argument("--build-context", default=None)
+    deploy_parser.add_argument("--dockerfile", default=None)
     deploy_parser.add_argument("--namespace", default=None)
     deploy_parser.add_argument("--kube-context", default=None)
     deploy_parser.add_argument("--report", metavar="PATH", help="Write deployment report")
@@ -62,18 +72,36 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "deploy":
+        svc_overrides = {
+            "build_type": args.build_type,
+            "deploy_type": args.deploy_type,
+            "build_context": args.build_context,
+            "dockerfile": args.dockerfile,
+        }
+        service = resolve_service(args.service, args.services, svc_overrides)
+
+        env_overrides = {
+            "compose_file": args.compose_file,
+            "kube_namespace": args.namespace,
+            "kube_context": args.kube_context,
+        }
+        env = resolve_environment(args.environment, args.environments, env_overrides)
+
+        health_url = args.health_url or f"http://localhost:{service.port}{service.health_endpoint}"
+
         deployment = run(
-            service=args.service,
-            environment=args.environment,
+            service=service.name,
+            environment=env.name,
             version=args.version,
-            build_type=args.build_type,
-            deploy_type=args.deploy_type,
-            compose_file=args.compose_file,
-            health_url=args.health_url,
-            build_context=args.build_context,
-            dockerfile=args.dockerfile,
-            namespace=args.namespace,
-            kube_context=args.kube_context,
+            build_type=service.build_type,
+            deploy_type=service.deploy_type,
+            compose_file=env.compose_file,
+            health_url=health_url,
+            build_context=service.build_context,
+            dockerfile=service.dockerfile,
+            namespace=env.kube_namespace,
+            kube_context=env.kube_context,
+            env_vars=env.env_vars or None,
         )
         _print_deployment(deployment)
         print()
