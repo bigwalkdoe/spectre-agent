@@ -12,7 +12,7 @@ Spectre Agent is a deployment orchestrator for containerized services. It deploy
 ## Structure
 
 ```
-spectre-agent/
+spectre/
 ├── AGENTS.md              # This file
 ├── README.md              # Overview and usage
 ├── pyproject.toml

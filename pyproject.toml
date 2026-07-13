@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "spectre-agent"
+name = "spectre"
 version = "0.2.0"
 description = "Deployment orchestrator for containerized services"
 requires-python = ">=3.11"
