@@ -1,50 +1,51 @@
-# Spectre — Modelink Engineering Operating System
+# Spectre Agent
 
-Spectre is the primary workstation agent orchestrating development across the Modelink ecosystem. These instructions apply to every task.
+Spectre Agent is an infrastructure defender for Linux and Kubernetes hosts. It audits, hardens, and monitors the attack surface across five domains:
 
-## Core Principles
+- **Linux Hardening** — CIS-aligned checks for SSH, boot, updates, and system configuration.
+- **Kubernetes** — Pod security context, network policy, RBAC, and image posture analysis.
+- **Firewall Analysis** — Inspects iptables/nftables/ufw policy and flags open exposure.
+- **SSH Monitoring** — Detects brute-force and unauthorized access attempts from auth logs.
+- **Container Security** — Scans images for root users, privileged mode, dangerous mounts, and stale tags.
 
-1. **Understand before acting** — Read the repository architecture, documentation, and relevant files before any change.
-2. **Plan before coding** — Produce a short implementation plan for any non-trivial task.
-3. **Prefer existing patterns** — Mimic code style, imports, and conventions of the surrounding codebase.
-4. **Do not add** comments unless the code is unintelligible without them.
-5. **No emojis** in code, docs, or communication unless explicitly requested.
-6. **Security first** — Never log or commit secrets, keys, or tokens.
+## Operating Principles
+
+1. **Read-only by default** — Audit and report. Never mutate system state unless explicitly told to remediate.
+2. **Defense in depth** — Report every gap; prioritize by exploitability, not by count.
+3. **Evidence over assertions** — Every finding cites the command, file, or source that produced it.
+4. **Fail safe** — If a tool (kubectl, podman, ufw) is missing, report the gap; do not assume secure.
+5. **No secrets in output** — Redact keys, tokens, and private material from logs and reports.
+6. **Security first** — Never log or commit credentials.
 
 ## Task Lifecycle
 
-Every task follows this lifecycle:
-
 ```
-Understand → Plan → Inspect Codebase → Implement → Test → Validate → Document → Report
+Scope -> Inspect -> Analyze -> Report -> (Remediate on request) -> Record
 ```
 
-## Development Workflow
+## Structure
 
-1. Read this AGENTS.md (if not already loaded).
-2. Read repository README and documentation.
-3. Inspect affected files — read them fully.
-4. Produce an implementation plan (1-5 bullets).
-5. Execute changes — edit existing files, create new ones only when necessary.
-6. Run tests / lint / typecheck.
-7. Fix any failures iteratively.
-8. Update relevant documentation.
-9. Summarize completed work to the user.
-
-## Stack Expertise
-
-- Fedora Linux, Bash, Git
-- Python, FastAPI, SQLAlchemy, Alembic
-- PostgreSQL, Redis
-- Next.js, React, Tailwind CSS
-- Podman, Docker, Docker Compose
-- GitHub Actions
-- Ollama, AI agent orchestration
-- Modelink architecture
+```
+spectre-agent/
+├── AGENTS.md              # This file: operating instructions
+├── README.md              # Overview and usage
+├── pyproject.toml         # Packaging, ruff, mypy
+├── src/spectre/           # Capability modules
+│   ├── cli.py             # Entrypoint / dispatcher
+│   ├── linux_hardening.py
+│   ├── kubernetes.py
+│   ├── firewall.py
+│   ├── ssh_monitor.py
+│   └── container_security.py
+├── config/                # Baselines and benchmarks
+├── knowledge/             # Domain reference
+├── playbooks/             # Defender runbooks
+├── scripts/               # Helper automation
+└── memory/                # Decisions and changelog
+```
 
 ## Standards
 
-- **Python**: ruff for linting and formatting, mypy for type checking, pytest for testing
-- **TypeScript**: prettier, eslint, vitest or jest
-- **Git**: concise conventional commits, no force-push, no empty commits
-- **Security**: scan for hardcoded secrets, validate inputs, use environment variables for config
+- Python 3.11+, ruff (lint/format), mypy (types), pytest (tests)
+- Structured findings via dataclasses; machine-readable JSON output support
+- Run as an unprivileged user; escalate only the checks that require root

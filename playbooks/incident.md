@@ -1,17 +1,9 @@
-# Incident Response Playbook
+# Incident Response
 
-## Steps
+1. **Triage** — Run `spectre scan --all --json` and sort by severity (critical → high).
+2. **Contain** — Isolate the affected host/namespace: block offending source IPs, cordon nodes, revoke credentials.
+3. **Eradicate** — Apply the `recommendation` from each finding; prefer least-privilege fixes.
+4. **Verify** — Re-run the relevant `spectre scan --<domain>` until clean.
+5. **Record** — Append the incident to `memory/changelog.md` with the trigger and remediation.
 
-1. **Assess severity** — Is production affected? How many users?
-2. **Mitigate** — Rollback, feature flag, or hotfix to restore service
-3. **Communicate** — Notify stakeholders with status
-4. **Root cause analysis** — Inspect logs, metrics, recent changes
-5. **Fix permanently** — Implement proper fix
-6. **Verify** — Deploy fix, monitor for resolution
-7. **Document** — Write postmortem: timeline, cause, fix, prevention
-
-## Principles
-
-- Restore service first, investigate second
-- No blame — focus on system improvements
-- Every incident should produce at least one preventive measure
+Spectre Agent is read-only. Remediation is performed by the operator unless explicitly requested.

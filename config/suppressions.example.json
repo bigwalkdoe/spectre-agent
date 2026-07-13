@@ -1,0 +1,12 @@
+[
+  {
+    "domain": "kubernetes",
+    "title": "Privileged system container in *",
+    "reason": "Known system addons (kube-proxy, etc.) require privileged mode"
+  },
+  {
+    "domain": "linux",
+    "title": "Automatic security updates not configured",
+    "reason": "Updates are applied manually via change management"
+  }
+]
