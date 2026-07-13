@@ -1,5 +1,8 @@
 logs/*
 .env
+.env.production
+.env.staging
+.env.local
 .git
 __pycache__
 *.pyc
