@@ -51,6 +51,9 @@ class Service:
     dockerfile: str = "Dockerfile"
     health_endpoint: str = "/health"
     port: int = 8000
+    push_image: bool = False
+    registry: str = ""
+    image_name: str = ""
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Service:

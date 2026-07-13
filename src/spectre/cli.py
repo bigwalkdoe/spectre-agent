@@ -87,6 +87,12 @@ def main(argv: list[str] | None = None) -> int:
     deploy_parser.add_argument("--dockerfile", default=None)
     deploy_parser.add_argument("--namespace", default=None)
     deploy_parser.add_argument("--kube-context", default=None)
+    deploy_parser.add_argument(
+        "--registry", default=None, help="Container registry (e.g., ghcr.io/org)"
+    )
+    deploy_parser.add_argument(
+        "--push", action="store_true", help="Push image to registry after build"
+    )
     deploy_parser.add_argument("--ci", action="store_true", help="CI mode (GitHub Actions output)")
     deploy_parser.add_argument("--report", metavar="PATH", help="Write deployment report")
     deploy_parser.add_argument(
@@ -112,8 +118,11 @@ def main(argv: list[str] | None = None) -> int:
             "strategy": args.strategy,
             "build_context": args.build_context,
             "dockerfile": args.dockerfile,
+            "registry": args.registry,
         }
         service = resolve_service(args.service, args.services, svc_overrides)
+        if args.push:
+            service.push_image = True
 
         env_overrides = {
             "compose_file": args.compose_file,
@@ -141,6 +150,9 @@ def main(argv: list[str] | None = None) -> int:
             namespace=env.kube_namespace,
             kube_context=env.kube_context,
             env_vars=env.env_vars or None,
+            registry=service.registry,
+            image_name=service.image_name,
+            push_image=service.push_image,
         )
         _print_deployment(deployment)
         print()

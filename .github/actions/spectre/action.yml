@@ -40,6 +40,14 @@ inputs:
     description: Health check URL
     required: false
     default: ""
+  registry:
+    description: Container registry (e.g., ghcr.io/org)
+    required: false
+    default: ""
+  push:
+    description: Push image to registry after build
+    required: false
+    default: "false"
   work-dir:
     description: Working directory
     required: false
@@ -65,6 +73,8 @@ runs:
         [ -n "${{ inputs.deploy-type }}" ] && ARGS="$ARGS --deploy-type ${{ inputs.deploy-type }}"
         [ -n "${{ inputs.compose-file }}" ] && ARGS="$ARGS --compose-file ${{ inputs.compose-file }}"
         [ -n "${{ inputs.health-url }}" ] && ARGS="$ARGS --health-url ${{ inputs.health-url }}"
+        [ -n "${{ inputs.registry }}" ] && ARGS="$ARGS --registry ${{ inputs.registry }}"
+        [ "${{ inputs.push }}" = "true" ] && ARGS="$ARGS --push"
         .venv/bin/spectre \
           --services ${{ inputs.services-config }} \
           --environments ${{ inputs.environments-config }} \

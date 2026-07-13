@@ -6,6 +6,9 @@ build_context = "."
 dockerfile = "Dockerfile"
 health_endpoint = "/health"
 port = 8000
+push_image = true
+registry = "ghcr.io/myorg"
+image_name = "api"
 
 [worker]
 build_type = "docker"

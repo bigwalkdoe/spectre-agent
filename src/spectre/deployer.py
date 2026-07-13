@@ -9,10 +9,13 @@ from spectre.models import DeploymentStatus, Stage, StepResult
 def deploy_compose(
     service: str,
     compose_file: str = "docker-compose.yml",
+    image_tag: str | None = None,
     env_vars: dict[str, str] | None = None,
 ) -> StepResult:
     start = time.monotonic()
     env = {**env_vars} if env_vars else None
+    if image_tag:
+        env = {**(env or {}), "SPECTRE_IMAGE": image_tag}
     try:
         cmd = [
             "docker",
@@ -32,10 +35,13 @@ def deploy_compose(
         )
         elapsed = int((time.monotonic() - start) * 1000)
         if result.returncode == 0:
+            msg = f"deployed {service}"
+            if image_tag:
+                msg += f" ({image_tag})"
             return StepResult(
                 stage=Stage.deploy,
                 status=DeploymentStatus.healthy,
-                message=f"deployed {service} via docker compose",
+                message=msg,
                 duration_ms=elapsed,
             )
         return StepResult(
@@ -71,7 +77,8 @@ def deploy_kubectl(
 ) -> StepResult:
     start = time.monotonic()
     try:
-        cmd = ["kubectl", "set", "image", f"deployment/{service}", f"{service}={image_tag}"]
+        container_name = service.replace("_", "-")
+        cmd = ["kubectl", "set", "image", f"deployment/{service}", f"{container_name}={image_tag}"]
         if namespace:
             cmd.extend(["-n", namespace])
         if context:
@@ -141,6 +148,13 @@ def compose_stop(
         )
 
 
+def _image_tag(service: str, version: str, registry: str = "", image_name: str = "") -> str:
+    name = image_name or service
+    if registry:
+        return f"{registry}/{name}:{version}"
+    return f"{service}:{version}"
+
+
 def deploy(
     service: str,
     version: str,
@@ -149,12 +163,14 @@ def deploy(
     namespace: str | None = None,
     kube_context: str | None = None,
     env_vars: dict[str, str] | None = None,
+    registry: str = "",
+    image_name: str = "",
 ) -> StepResult:
+    tag = _image_tag(service, version, registry, image_name)
     if deploy_type == "docker-compose":
-        return deploy_compose(service, compose_file, env_vars)
+        return deploy_compose(service, compose_file, tag, env_vars)
     if deploy_type == "kubernetes":
-        image_tag = f"{service}:{version}"
-        return deploy_kubectl(service, image_tag, namespace, kube_context)
+        return deploy_kubectl(service, tag, namespace, kube_context)
     return StepResult(
         stage=Stage.deploy,
         status=DeploymentStatus.failed,

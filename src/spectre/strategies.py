@@ -18,14 +18,15 @@ def rolling(
     namespace: str | None = None,
     kube_context: str | None = None,
     env_vars: dict[str, str] | None = None,
+    registry: str = "",
+    image_name: str = "",
 ) -> list[StepResult]:
     steps: list[StepResult] = []
-
-    step = deploy(service, version, deploy_type, compose_file, namespace, kube_context, env_vars)
+    step = deploy(service, version, deploy_type, compose_file, namespace, kube_context, env_vars,
+                  registry=registry, image_name=image_name)
     steps.append(step)
     if not _healthy(step):
         return steps
-
     step = health_check(health_url)
     steps.append(step)
     return steps
@@ -40,19 +41,19 @@ def blue_green(
     namespace: str | None = None,
     kube_context: str | None = None,
     env_vars: dict[str, str] | None = None,
+    registry: str = "",
+    image_name: str = "",
 ) -> list[StepResult]:
     steps: list[StepResult] = []
-
-    step = deploy(service, version, deploy_type, compose_file, namespace, kube_context, env_vars)
+    step = deploy(service, version, deploy_type, compose_file, namespace, kube_context, env_vars,
+                  registry=registry, image_name=image_name)
     steps.append(step)
     if not _healthy(step):
         return steps
-
     step = health_check(health_url)
     steps.append(step)
     if not _healthy(step):
         return steps
-
     if deploy_type == "docker-compose":
         step = compose_stop(service, compose_file)
         steps.append(step)
@@ -64,7 +65,6 @@ def blue_green(
                 message="blue-green cleanup handled by kubernetes natively",
             )
         )
-
     return steps
 
 
@@ -77,19 +77,19 @@ def canary(
     namespace: str | None = None,
     kube_context: str | None = None,
     env_vars: dict[str, str] | None = None,
+    registry: str = "",
+    image_name: str = "",
 ) -> list[StepResult]:
     steps: list[StepResult] = []
-
-    step = deploy(service, version, deploy_type, compose_file, namespace, kube_context, env_vars)
+    step = deploy(service, version, deploy_type, compose_file, namespace, kube_context, env_vars,
+                  registry=registry, image_name=image_name)
     steps.append(step)
     if not _healthy(step):
         return steps
-
     step = health_check(health_url)
     steps.append(step)
     if not _healthy(step):
         return steps
-
     step = StepResult(
         stage=Stage.deploy,
         status=DeploymentStatus.healthy,
@@ -116,6 +116,8 @@ def run(
     namespace: str | None = None,
     kube_context: str | None = None,
     env_vars: dict[str, str] | None = None,
+    registry: str = "",
+    image_name: str = "",
 ) -> list[StepResult]:
     if isinstance(strategy, str):
         try:
@@ -129,4 +131,6 @@ def run(
         namespace=namespace,
         kube_context=kube_context,
         env_vars=env_vars,
+        registry=registry,
+        image_name=image_name,
     )

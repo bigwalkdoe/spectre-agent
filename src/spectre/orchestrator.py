@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from spectre.builder import build
+from spectre.builder import build, docker_push
 from spectre.checker import pre_check
 from spectre.models import (
     Deployment,
@@ -11,6 +11,13 @@ from spectre.models import (
 )
 from spectre.state import append_deployment
 from spectre.strategies import run as run_strategy
+
+
+def _image_tag(service: str, version: str, registry: str = "", image_name: str = "") -> str:
+    name = image_name or service
+    if registry:
+        return f"{registry}/{name}:{version}"
+    return f"{service}:{version}"
 
 
 def _now() -> str:
@@ -31,6 +38,9 @@ def run(
     namespace: str | None = None,
     kube_context: str | None = None,
     env_vars: dict[str, str] | None = None,
+    registry: str = "",
+    image_name: str = "",
+    push_image: bool = False,
 ) -> Deployment:
     deployment = Deployment(
         service=service,
@@ -49,13 +59,24 @@ def run(
         return deployment
 
     deployment.status = DeploymentStatus.building
-    step = build(service, version, build_type, context=build_context, dockerfile=dockerfile)
+    step = build(service, version, build_type, context=build_context, dockerfile=dockerfile,
+                 registry=registry, image_name=image_name)
     deployment.steps.append(step)
     if step.status != DeploymentStatus.healthy:
         deployment.status = DeploymentStatus.failed
         deployment.completed_at = _now()
         append_deployment(deployment)
         return deployment
+
+    if push_image and build_type == "docker":
+        tag = _image_tag(service, version, registry, image_name)
+        step = docker_push(tag)
+        deployment.steps.append(step)
+        if step.status != DeploymentStatus.healthy:
+            deployment.status = DeploymentStatus.failed
+            deployment.completed_at = _now()
+            append_deployment(deployment)
+            return deployment
 
     deployment.status = DeploymentStatus.deploying
     strategy_enum = Strategy(strategy)
@@ -66,6 +87,8 @@ def run(
         namespace=namespace,
         kube_context=kube_context,
         env_vars=env_vars,
+        registry=registry,
+        image_name=image_name,
     )
     deployment.steps.extend(strat_steps)
 
