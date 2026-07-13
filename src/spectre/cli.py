@@ -11,6 +11,7 @@ from spectre.models import Deployment, DeploymentStatus, Strategy
 from spectre.orchestrator import run as run_deploy
 from spectre.report import record_run, write_report
 from spectre.rollback import rollback
+from spectre.schedule import run_scheduler
 from spectre.secrets import collect_secrets, merge_secrets
 from spectre.state import list_deployments
 
@@ -130,6 +131,20 @@ def main(argv: list[str] | None = None) -> int:
     dash_parser = sub.add_parser("dashboard", help="Start web dashboard")
     dash_parser.add_argument("--port", type=int, default=8080, help="HTTP port")
     dash_parser.add_argument("--host", default="127.0.0.1", help="Bind address")
+
+    sched_parser = sub.add_parser("schedule", help="Run scheduled deployments")
+    sched_parser.add_argument(
+        "--schedules", default="config/schedules.toml",
+        help="Schedules config file (TOML or JSON)",
+    )
+    sched_parser.add_argument(
+        "--once", action="store_true",
+        help="Run due schedules once and exit (for cron integration)",
+    )
+    sched_parser.add_argument(
+        "--check-interval", type=float, default=30.0,
+        help="Scheduler loop check interval in seconds (default: 30)",
+    )
 
     args = parser.parse_args(argv)
 
@@ -258,6 +273,13 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "dashboard":
         serve_dashboard(host=args.host, port=args.port)
         return 0
+
+    elif args.command == "schedule":
+        return run_scheduler(
+            schedules_path=args.schedules,
+            interval=args.check_interval,
+            once=args.once,
+        )
 
     return 0
 

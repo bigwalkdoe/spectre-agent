@@ -81,6 +81,19 @@ class Environment:
 
 
 @dataclass
+class Schedule:
+    name: str
+    service: str
+    environment: str
+    schedule: str
+    version: str = "latest"
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Schedule:
+        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+
+
+@dataclass
 class Deployment:
     service: str
     environment: str

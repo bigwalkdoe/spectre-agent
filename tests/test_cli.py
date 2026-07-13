@@ -179,6 +179,20 @@ def test_parallel_flag_called(tmp_path: Path) -> None:
     assert rc == 0
 
 
+def test_schedule_help() -> None:
+    try:
+        with patch("sys.stdout"):
+            main(["schedule", "--help"])
+    except SystemExit as e:
+        assert e.code == 0
+
+
+def test_schedule_once_no_schedules(tmp_path: Path) -> None:
+    with patch("spectre.schedule.load_schedules", return_value=[]):
+        rc = main(["schedule", "--once"])
+    assert rc == 0
+
+
 def test_multi_service_deploy_ci_flag(tmp_path: Path, monkeypatch: object) -> None:
     summary_file = tmp_path / "summary.md"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_file))
