@@ -74,8 +74,11 @@ def main(argv: list[str] | None = None) -> int:
 
     sub = parser.add_subparsers(dest="command", required=True)
 
-    deploy_parser = sub.add_parser("deploy", help="Deploy a service")
-    deploy_parser.add_argument("service", help="Service name")
+    deploy_parser = sub.add_parser("deploy", help="Deploy one or more services")
+    deploy_parser.add_argument(
+        "service",
+        help="Service name, or comma-separated list (e.g. api,web) for multi-service",
+    )
     deploy_parser.add_argument("environment", help="Target environment")
     deploy_parser.add_argument("version", help="Version tag (git sha or semver)")
     deploy_parser.add_argument("--build-type", default=None, choices=["docker", "pip"])
@@ -134,10 +137,6 @@ def main(argv: list[str] | None = None) -> int:
             "dockerfile": args.dockerfile,
             "registry": args.registry,
         }
-        service = resolve_service(args.service, args.services, svc_overrides)
-        if args.push:
-            service.push_image = True
-
         env_overrides = {
             "compose_file": args.compose_file,
             "kube_namespace": args.namespace,
@@ -148,63 +147,74 @@ def main(argv: list[str] | None = None) -> int:
         }
         env = resolve_environment(args.environment, args.environments, env_overrides)
 
-        secrets = collect_secrets(
-            service_secrets=service.secrets,
-            environment_secrets=env.secrets,
-            secrets_file=service.secrets_file or None,
-            cli_secrets_file=args.secrets,
-        )
-        merged_env = merge_secrets(env.env_vars or None, secrets)
+        service_names = [s.strip() for s in args.service.split(",")]
+        any_failed = False
+        for svc_name in service_names:
+            service = resolve_service(svc_name, args.services, svc_overrides)
+            if args.push:
+                service.push_image = True
 
-        health_url = args.health_url or f"http://localhost:{service.port}{service.health_endpoint}"
+            secrets = collect_secrets(
+                service_secrets=service.secrets,
+                environment_secrets=env.secrets,
+                secrets_file=service.secrets_file or None,
+                cli_secrets_file=args.secrets,
+            )
+            merged_env = merge_secrets(env.env_vars or None, secrets)
 
-        if args.ci:
-            print("::group::Spectre Deploy")
+            health_url = args.health_url or f"http://localhost:{service.port}{service.health_endpoint}"
 
-        deployment = run_deploy(
-            service=service.name,
-            environment=env.name,
-            version=args.version,
-            build_type=service.build_type,
-            deploy_type=service.deploy_type,
-            strategy=service.strategy,
-            compose_file=env.compose_file,
-            health_url=health_url,
-            build_context=service.build_context,
-            dockerfile=service.dockerfile,
-            namespace=env.kube_namespace,
-            kube_context=env.kube_context,
-            env_vars=merged_env,
-            registry=service.registry,
-            image_name=service.image_name,
-            push_image=service.push_image,
-            force=args.force,
-            hosts=env.hosts,
-            ssh_user=env.ssh_user,
-            ssh_key=env.ssh_key,
-            ssh_port=env.ssh_port,
-        )
-        _print_deployment(deployment)
-        print()
+            if args.ci and service_names.index(svc_name) == 0:
+                print("::group::Spectre Deploy")
 
-        if args.ci:
-            _write_step_summary(deployment)
-            for step in deployment.steps:
-                if step.status == DeploymentStatus.failed:
-                    print(f"::error::[{step.stage}] {step.message}")
-                else:
-                    print(f"::notice::[{step.stage}] {step.message}")
-            print("::endgroup::")
+            deployment = run_deploy(
+                service=service.name,
+                environment=env.name,
+                version=args.version,
+                build_type=service.build_type,
+                deploy_type=service.deploy_type,
+                strategy=service.strategy,
+                compose_file=env.compose_file,
+                health_url=health_url,
+                build_context=service.build_context,
+                dockerfile=service.dockerfile,
+                namespace=env.kube_namespace,
+                kube_context=env.kube_context,
+                env_vars=merged_env,
+                registry=service.registry,
+                image_name=service.image_name,
+                push_image=service.push_image,
+                force=args.force,
+                hosts=env.hosts,
+                ssh_user=env.ssh_user,
+                ssh_key=env.ssh_key,
+                ssh_port=env.ssh_port,
+            )
+            _print_deployment(deployment)
+            print()
 
-        if args.report:
-            path = write_report(deployment, args.report)
-            print(f"report written: {path}")
+            if deployment.status == DeploymentStatus.failed:
+                any_failed = True
 
-        if args.record:
-            path = record_run(deployment)
-            print(f"run recorded: {path}")
+            if args.ci:
+                _write_step_summary(deployment)
+                for step in deployment.steps:
+                    if step.status == DeploymentStatus.failed:
+                        print(f"::error::[{step.stage}] {step.message}")
+                    else:
+                        print(f"::notice::[{step.stage}] {step.message}")
+                if service_names.index(svc_name) == len(service_names) - 1:
+                    print("::endgroup::")
 
-        return 1 if deployment.status == DeploymentStatus.failed else 0
+            if args.report:
+                path = write_report(deployment, args.report)
+                print(f"report written: {path}")
+
+            if args.record:
+                path = record_run(deployment)
+                print(f"run recorded: {path}")
+
+        return 1 if any_failed else 0
 
     elif args.command == "status":
         deployments = list_deployments()

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from spectre.deployer import _ssh_base_args, deploy, deploy_ssh, compose_stop_ssh
-from spectre.models import DeploymentStatus, StepResult, Stage
+from spectre.deployer import _ssh_base_args, compose_stop_ssh, deploy, deploy_ssh
+from spectre.models import DeploymentStatus, Stage, StepResult
 
 
 def test_ssh_base_args_host_only() -> None:
@@ -58,15 +58,6 @@ def test_deploy_ssh_success(mock_run) -> None:
 
 @patch("subprocess.run")
 def test_deploy_ssh_one_host_fails(mock_run) -> None:
-    def side_effect(*args, **kwargs):
-        class Result:
-            returncode = 0
-            stderr = ""
-            stdout = ""
-        return Result()
-
-    mock_run.side_effect = side_effect
-    results = []
     call = [0]
 
     def fail_on_second(*args, **kwargs):
