@@ -37,6 +37,9 @@ def run(
     strategy: str = "rolling",
     compose_file: str = "docker-compose.yml",
     health_url: str = "http://localhost:8000/health",
+    health_timeout: int | None = None,
+    health_interval: int | None = None,
+    health_expected: set[int] | None = None,
     build_context: str = ".",
     dockerfile: str = "Dockerfile",
     namespace: str | None = None,
@@ -118,6 +121,9 @@ def run(
             ssh_user=ssh_user,
             ssh_key=ssh_key,
             ssh_port=ssh_port,
+            health_timeout=health_timeout,
+            health_interval=health_interval,
+            health_expected=health_expected,
         )
         deployment.steps.extend(strat_steps)
 

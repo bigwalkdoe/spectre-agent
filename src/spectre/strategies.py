@@ -9,6 +9,22 @@ def _healthy(step: StepResult) -> bool:
     return step.status == DeploymentStatus.healthy
 
 
+def _health_step(
+    health_url: str,
+    timeout: int | None = None,
+    interval: int | None = None,
+    expected: set[int] | None = None,
+) -> StepResult:
+    kwargs: dict = {}
+    if timeout is not None:
+        kwargs["timeout"] = timeout
+    if interval is not None:
+        kwargs["interval"] = interval
+    if expected is not None:
+        kwargs["expected_codes"] = expected
+    return health_check(health_url, **kwargs)
+
+
 def rolling(
     service: str,
     version: str,
@@ -24,6 +40,9 @@ def rolling(
     ssh_user: str = "",
     ssh_key: str = "",
     ssh_port: int = 22,
+    health_timeout: int | None = None,
+    health_interval: int | None = None,
+    health_expected: set[int] | None = None,
 ) -> list[StepResult]:
     steps: list[StepResult] = []
     step = deploy(service, version, deploy_type, compose_file, namespace, kube_context, env_vars,
@@ -32,7 +51,7 @@ def rolling(
     steps.append(step)
     if not _healthy(step):
         return steps
-    step = health_check(health_url)
+    step = _health_step(health_url, health_timeout, health_interval, health_expected)
     steps.append(step)
     return steps
 
@@ -52,6 +71,9 @@ def blue_green(
     ssh_user: str = "",
     ssh_key: str = "",
     ssh_port: int = 22,
+    health_timeout: int | None = None,
+    health_interval: int | None = None,
+    health_expected: set[int] | None = None,
 ) -> list[StepResult]:
     steps: list[StepResult] = []
     step = deploy(service, version, deploy_type, compose_file, namespace, kube_context, env_vars,
@@ -60,7 +82,7 @@ def blue_green(
     steps.append(step)
     if not _healthy(step):
         return steps
-    step = health_check(health_url)
+    step = _health_step(health_url, health_timeout, health_interval, health_expected)
     steps.append(step)
     if not _healthy(step):
         return steps
@@ -96,6 +118,9 @@ def canary(
     ssh_user: str = "",
     ssh_key: str = "",
     ssh_port: int = 22,
+    health_timeout: int | None = None,
+    health_interval: int | None = None,
+    health_expected: set[int] | None = None,
 ) -> list[StepResult]:
     steps: list[StepResult] = []
     step = deploy(service, version, deploy_type, compose_file, namespace, kube_context, env_vars,
@@ -104,7 +129,7 @@ def canary(
     steps.append(step)
     if not _healthy(step):
         return steps
-    step = health_check(health_url)
+    step = _health_step(health_url, health_timeout, health_interval, health_expected)
     steps.append(step)
     if not _healthy(step):
         return steps
@@ -140,6 +165,9 @@ def run(
     ssh_user: str = "",
     ssh_key: str = "",
     ssh_port: int = 22,
+    health_timeout: int | None = None,
+    health_interval: int | None = None,
+    health_expected: set[int] | None = None,
 ) -> list[StepResult]:
     if isinstance(strategy, str):
         try:
@@ -159,4 +187,7 @@ def run(
         ssh_user=ssh_user,
         ssh_key=ssh_key,
         ssh_port=ssh_port,
+        health_timeout=health_timeout,
+        health_interval=health_interval,
+        health_expected=health_expected,
     )

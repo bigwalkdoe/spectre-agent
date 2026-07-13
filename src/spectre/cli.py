@@ -90,6 +90,18 @@ def main(argv: list[str] | None = None) -> int:
     deploy_parser.add_argument("--strategy", default=None, choices=strat_choices)
     deploy_parser.add_argument("--compose-file", default=None)
     deploy_parser.add_argument("--health-url", default=None)
+    deploy_parser.add_argument(
+        "--health-timeout", type=int, default=None,
+        help="Health check timeout in seconds (default: 30)",
+    )
+    deploy_parser.add_argument(
+        "--health-interval", type=int, default=None,
+        help="Health check retry interval in seconds (default: 2)",
+    )
+    deploy_parser.add_argument(
+        "--health-expected", default=None,
+        help="Expected HTTP status codes, comma-separated (default: 200)",
+    )
     deploy_parser.add_argument("--build-context", default=None)
     deploy_parser.add_argument("--dockerfile", default=None)
     deploy_parser.add_argument("--namespace", default=None)
@@ -156,6 +168,7 @@ def main(argv: list[str] | None = None) -> int:
             "build_context": args.build_context,
             "dockerfile": args.dockerfile,
             "registry": args.registry,
+            "health_expected": args.health_expected,
         }
         env_overrides = {
             "compose_file": args.compose_file,
@@ -167,6 +180,11 @@ def main(argv: list[str] | None = None) -> int:
         }
         env = resolve_environment(args.environment, args.environments, env_overrides)
         service_names = [s.strip() for s in args.service.split(",")]
+
+        def _parse_expected(raw: str | None) -> set[int] | None:
+            if raw is None:
+                return None
+            return {int(s.strip()) for s in raw.split(",") if s.strip()}
 
         def _deploy_one(svc_name: str) -> Deployment:
             service = resolve_service(svc_name, args.services, svc_overrides)
@@ -180,6 +198,10 @@ def main(argv: list[str] | None = None) -> int:
             )
             merged_env = merge_secrets(env.env_vars or None, secrets)
             health_url = args.health_url or f"http://localhost:{service.port}{service.health_endpoint}"
+            health_expected = (
+                _parse_expected(args.health_expected)
+                or _parse_expected(service.health_expected)
+            )
             return run_deploy(
                 service=service.name,
                 environment=env.name,
@@ -189,6 +211,9 @@ def main(argv: list[str] | None = None) -> int:
                 strategy=service.strategy,
                 compose_file=env.compose_file,
                 health_url=health_url,
+                health_timeout=args.health_timeout,
+                health_interval=args.health_interval,
+                health_expected=health_expected,
                 build_context=service.build_context,
                 dockerfile=service.dockerfile,
                 namespace=env.kube_namespace,

@@ -34,37 +34,75 @@ def pre_check(service_name: str, context: str = ".") -> StepResult:
     )
 
 
-def health_check(url: str, timeout: int = 30, interval: int = 2) -> StepResult:
-    start = time.monotonic()
-    deadline = start + timeout
-
+def _single_health(
+    url: str,
+    timeout: int,
+    interval: int,
+    expected_codes: set[int],
+) -> tuple[bool, str]:
+    deadline = time.monotonic() + timeout
+    current_interval: float = interval
     last_error = ""
+
     while time.monotonic() < deadline:
         try:
             req = Request(url, method="GET")
-            with urlopen(req, timeout=interval) as resp:
-                if resp.status == 200:
-                    elapsed = int((time.monotonic() - start) * 1000)
-                    return StepResult(
-                        stage=Stage.health_check,
-                        status=DeploymentStatus.healthy,
-                        message=f"healthy: HTTP {resp.status}",
-                        duration_ms=elapsed,
-                    )
-                last_error = f"HTTP {resp.status}"
+            with urlopen(req, timeout=max(1, int(current_interval))) as resp:
+                if resp.status in expected_codes:
+                    return True, f"healthy: HTTP {resp.status}"
+                last_error = f"HTTP {resp.status} (expected {sorted(expected_codes)})"
         except URLError as e:
             last_error = str(e.reason)
         except OSError as e:
             last_error = str(e)
-        time.sleep(interval)
 
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        sleep_time = min(current_interval, remaining)
+        time.sleep(sleep_time)
+        current_interval = min(current_interval * 1.5, 10.0)
+
+    return False, last_error
+
+
+def health_check(
+    url: str,
+    timeout: int = 30,
+    interval: int = 2,
+    expected_codes: set[int] | None = None,
+) -> StepResult:
+    start = time.monotonic()
+    codes = expected_codes or {200}
+    ok, msg = _single_health(url, timeout, interval, codes)
     elapsed = int((time.monotonic() - start) * 1000)
+    if ok:
+        return StepResult(
+            stage=Stage.health_check,
+            status=DeploymentStatus.healthy,
+            message=msg,
+            duration_ms=elapsed,
+        )
     return StepResult(
         stage=Stage.health_check,
         status=DeploymentStatus.failed,
-        message=f"unhealthy after {timeout}s: {last_error}",
+        message=f"unhealthy after {timeout}s: {msg}",
         duration_ms=elapsed,
     )
+
+
+def health_check_multi(
+    urls: list[str],
+    timeout: int = 30,
+    interval: int = 2,
+    expected_codes: set[int] | None = None,
+) -> list[StepResult]:
+    codes = expected_codes or {200}
+    results: list[StepResult] = []
+    for url in urls:
+        step = health_check(url, timeout, interval, codes)
+        results.append(step)
+    return results
 
 
 def _git_clean(context: str = ".") -> bool:

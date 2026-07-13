@@ -51,6 +51,7 @@ class Service:
     dockerfile: str = "Dockerfile"
     health_endpoint: str = "/health"
     port: int = 8000
+    health_expected: str = "200"
     push_image: bool = False
     registry: str = ""
     image_name: str = ""
