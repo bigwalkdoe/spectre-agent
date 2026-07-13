@@ -9,6 +9,7 @@ from spectre import (
     report,
     rollback,
     state,
+    strategies,
 )
 
 __all__ = [
@@ -22,4 +23,5 @@ __all__ = [
     "rollback",
     "state",
     "report",
+    "strategies",
 ]

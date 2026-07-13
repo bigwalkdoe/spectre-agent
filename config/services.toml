@@ -1,6 +1,7 @@
 [api]
 build_type = "docker"
 deploy_type = "docker-compose"
+strategy = "blue_green"
 build_context = "."
 dockerfile = "Dockerfile"
 health_endpoint = "/health"
@@ -9,6 +10,7 @@ port = 8000
 [worker]
 build_type = "docker"
 deploy_type = "kubernetes"
+strategy = "rolling"
 build_context = "./worker"
 health_endpoint = "/healthz"
 port = 8080

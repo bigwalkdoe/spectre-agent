@@ -4,7 +4,7 @@ import argparse
 import sys
 
 from spectre.config import resolve_environment, resolve_service
-from spectre.models import DeploymentStatus
+from spectre.models import DeploymentStatus, Strategy
 from spectre.orchestrator import run
 from spectre.report import record_run, write_report
 from spectre.rollback import rollback
@@ -48,6 +48,8 @@ def main(argv: list[str] | None = None) -> int:
     deploy_parser.add_argument("--build-type", default=None, choices=["docker", "pip"])
     choices = ["docker-compose", "kubernetes"]
     deploy_parser.add_argument("--deploy-type", default=None, choices=choices)
+    strat_choices = [s.value for s in Strategy]
+    deploy_parser.add_argument("--strategy", default=None, choices=strat_choices)
     deploy_parser.add_argument("--compose-file", default=None)
     deploy_parser.add_argument("--health-url", default=None)
     deploy_parser.add_argument("--build-context", default=None)
@@ -75,6 +77,7 @@ def main(argv: list[str] | None = None) -> int:
         svc_overrides = {
             "build_type": args.build_type,
             "deploy_type": args.deploy_type,
+            "strategy": args.strategy,
             "build_context": args.build_context,
             "dockerfile": args.dockerfile,
         }
@@ -95,6 +98,7 @@ def main(argv: list[str] | None = None) -> int:
             version=args.version,
             build_type=service.build_type,
             deploy_type=service.deploy_type,
+            strategy=service.strategy,
             compose_file=env.compose_file,
             health_url=health_url,
             build_context=service.build_context,

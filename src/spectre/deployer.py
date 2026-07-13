@@ -110,6 +110,37 @@ def deploy_kubectl(
         )
 
 
+def compose_stop(
+    service: str,
+    compose_file: str = "docker-compose.yml",
+) -> StepResult:
+    start = time.monotonic()
+    try:
+        result = subprocess.run(
+            ["docker", "compose", "-f", compose_file, "rm", "-fvs", service],
+            capture_output=True, text=True, timeout=60,
+        )
+        elapsed = int((time.monotonic() - start) * 1000)
+        status = DeploymentStatus.healthy if result.returncode == 0 else DeploymentStatus.failed
+        return StepResult(
+            stage=Stage.deploy,
+            status=status,
+            message=f"stopped {service}" if status == DeploymentStatus.healthy
+                    else (result.stderr.strip() or "docker compose rm failed"),
+            duration_ms=elapsed,
+        )
+    except subprocess.TimeoutExpired:
+        return StepResult(
+            stage=Stage.deploy, status=DeploymentStatus.failed,
+            message="docker compose rm timed out",
+        )
+    except FileNotFoundError:
+        return StepResult(
+            stage=Stage.deploy, status=DeploymentStatus.failed,
+            message="docker not found in PATH",
+        )
+
+
 def deploy(
     service: str,
     version: str,

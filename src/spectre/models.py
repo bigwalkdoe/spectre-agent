@@ -14,6 +14,12 @@ class DeploymentStatus(StrEnum):
     rolled_back = "rolled_back"
 
 
+class Strategy(StrEnum):
+    rolling = "rolling"
+    blue_green = "blue_green"
+    canary = "canary"
+
+
 class Stage(StrEnum):
     pre_check = "pre_check"
     build = "build"
@@ -40,6 +46,7 @@ class Service:
     name: str
     build_type: str = "docker"
     deploy_type: str = "docker-compose"
+    strategy: str = "rolling"
     build_context: str = "."
     dockerfile: str = "Dockerfile"
     health_endpoint: str = "/health"
