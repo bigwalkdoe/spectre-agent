@@ -1,0 +1,43 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": ["AGENTS.md"],
+  "skills": {
+    "paths": [
+      ".opencode/skills",
+      "~/.agents/skills/microsoft-foundry",
+      "~/.claude/skills"
+    ]
+  },
+  "references": {
+    "spectre-config": {
+      "path": "~/.spectre/config",
+      "description": "Use for Spectre workstation and code configuration standards"
+    },
+    "spectre-knowledge": {
+      "path": "~/.spectre/knowledge",
+      "description": "Use for stack-specific knowledge (FastAPI, Next.js, PostgreSQL, etc.)"
+    },
+    "spectre-playbooks": {
+      "path": "~/.spectre/playbooks",
+      "description": "Use for repeatable development workflows and best practices"
+    },
+    "spectre-templates": {
+      "path": "~/.spectre/templates",
+      "description": "Use for project scaffolding templates (Docker, Kubernetes, GitHub Actions)"
+    }
+  },
+  "agent": {
+    "spectre": {
+      "description": "Deployment orchestrator for containerized services. Spawn as a subagent for deploy, rollback, status, list, dashboard, schedule, and secrets operations across environments. Use for pre_check → build → deploy → health_check → record pipeline, docker-compose/kubernetes/SSH targets, rolling/blue_green/canary strategies, deployment locks, web dashboard, scheduled cron deployments, .env secrets, multi-service and parallel deploys, and CI/CD integration. Also orchestrates development tasks across the broader Modelink ecosystem including Microsoft Foundry model deployment, fine-tuning, capacity discovery, and agent management.",
+      "mode": "subagent",
+      "permission": {
+        "edit": "allow",
+        "bash": "allow",
+        "read": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "task": "allow"
+      }
+    }
+  }
+}
