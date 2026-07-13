@@ -131,6 +131,54 @@ def test_multi_service_deploy_one_fails(tmp_path: Path) -> None:
     assert rc == 1
 
 
+def test_parallel_multi_service(tmp_path: Path) -> None:
+    from spectre.models import Deployment, DeploymentStatus
+
+    def mock_deploy(**kwargs):
+        return Deployment(
+            service=kwargs["service"], environment=kwargs["environment"],
+            version=kwargs["version"], status=DeploymentStatus.healthy,
+        )
+
+    with patch("spectre.state._STATE_DIR", tmp_path / ".spectre"), \
+         patch("spectre.cli.run_deploy", side_effect=mock_deploy):
+        rc = main(["deploy", "api,web,worker", "staging", "v1", "--parallel"])
+    assert rc == 0
+
+
+def test_parallel_multi_service_one_fails(tmp_path: Path) -> None:
+    from spectre.models import Deployment, DeploymentStatus
+    call_count: list[int] = [0]
+
+    def mock_deploy(**kwargs):
+        call_count[0] += 1
+        status = DeploymentStatus.failed if call_count[0] == 1 else DeploymentStatus.healthy
+        return Deployment(
+            service=kwargs["service"], environment=kwargs["environment"],
+            version=kwargs["version"], status=status,
+        )
+
+    with patch("spectre.state._STATE_DIR", tmp_path / ".spectre"), \
+         patch("spectre.cli.run_deploy", side_effect=mock_deploy):
+        rc = main(["deploy", "api,web", "staging", "v1", "--parallel"])
+    assert rc == 1
+
+
+def test_parallel_flag_called(tmp_path: Path) -> None:
+    from spectre.models import Deployment, DeploymentStatus
+
+    def mock_deploy(**kwargs):
+        return Deployment(
+            service=kwargs["service"], environment=kwargs["environment"],
+            version=kwargs["version"], status=DeploymentStatus.healthy,
+        )
+
+    with patch("spectre.state._STATE_DIR", tmp_path / ".spectre"), \
+         patch("spectre.cli.run_deploy", side_effect=mock_deploy):
+        rc = main(["deploy", "api", "staging", "v1", "--parallel"])
+    assert rc == 0
+
+
 def test_multi_service_deploy_ci_flag(tmp_path: Path, monkeypatch: object) -> None:
     summary_file = tmp_path / "summary.md"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_file))

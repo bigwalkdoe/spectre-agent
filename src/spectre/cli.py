@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import os
 import sys
 
@@ -103,6 +104,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     deploy_parser.add_argument("--force", action="store_true", help="Bypass deployment lock")
     deploy_parser.add_argument(
+        "--parallel", action="store_true",
+        help="Deploy multiple services in parallel (default: sequential)",
+    )
+    deploy_parser.add_argument(
         "--secrets", metavar="PATH",
         help="Path to .env file with secrets (merged with config secrets)",
     )
@@ -146,14 +151,12 @@ def main(argv: list[str] | None = None) -> int:
             "ssh_port": args.ssh_port,
         }
         env = resolve_environment(args.environment, args.environments, env_overrides)
-
         service_names = [s.strip() for s in args.service.split(",")]
-        any_failed = False
-        for svc_name in service_names:
+
+        def _deploy_one(svc_name: str) -> Deployment:
             service = resolve_service(svc_name, args.services, svc_overrides)
             if args.push:
                 service.push_image = True
-
             secrets = collect_secrets(
                 service_secrets=service.secrets,
                 environment_secrets=env.secrets,
@@ -161,13 +164,8 @@ def main(argv: list[str] | None = None) -> int:
                 cli_secrets_file=args.secrets,
             )
             merged_env = merge_secrets(env.env_vars or None, secrets)
-
             health_url = args.health_url or f"http://localhost:{service.port}{service.health_endpoint}"
-
-            if args.ci and service_names.index(svc_name) == 0:
-                print("::group::Spectre Deploy")
-
-            deployment = run_deploy(
+            return run_deploy(
                 service=service.name,
                 environment=env.name,
                 version=args.version,
@@ -190,12 +188,27 @@ def main(argv: list[str] | None = None) -> int:
                 ssh_key=env.ssh_key,
                 ssh_port=env.ssh_port,
             )
+
+        if args.parallel and len(service_names) > 1:
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=len(service_names),
+            ) as executor:
+                futures = {executor.submit(_deploy_one, n): n for n in service_names}
+                deployments = []
+                for future in concurrent.futures.as_completed(futures):
+                    deployments.append(future.result())
+                deployments.sort(key=lambda d: service_names.index(d.service))
+        else:
+            deployments = [_deploy_one(n) for n in service_names]
+
+        any_failed = False
+        if args.ci:
+            print("::group::Spectre Deploy")
+        for _i, deployment in enumerate(deployments):
             _print_deployment(deployment)
             print()
-
             if deployment.status == DeploymentStatus.failed:
                 any_failed = True
-
             if args.ci:
                 _write_step_summary(deployment)
                 for step in deployment.steps:
@@ -203,16 +216,14 @@ def main(argv: list[str] | None = None) -> int:
                         print(f"::error::[{step.stage}] {step.message}")
                     else:
                         print(f"::notice::[{step.stage}] {step.message}")
-                if service_names.index(svc_name) == len(service_names) - 1:
-                    print("::endgroup::")
-
             if args.report:
                 path = write_report(deployment, args.report)
                 print(f"report written: {path}")
-
             if args.record:
                 path = record_run(deployment)
                 print(f"run recorded: {path}")
+        if args.ci:
+            print("::endgroup::")
 
         return 1 if any_failed else 0
 
