@@ -3,6 +3,7 @@ from spectre import (
     checker,
     cli,
     config,
+    dashboard,
     deployer,
     lock,
     models,
@@ -16,6 +17,7 @@ from spectre import (
 __all__ = [
     "cli",
     "config",
+    "dashboard",
     "lock",
     "models",
     "orchestrator",

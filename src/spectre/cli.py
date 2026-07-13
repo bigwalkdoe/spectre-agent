@@ -5,6 +5,7 @@ import os
 import sys
 
 from spectre.config import resolve_environment, resolve_service
+from spectre.dashboard import serve as serve_dashboard
 from spectre.models import Deployment, DeploymentStatus, Strategy
 from spectre.orchestrator import run as run_deploy
 from spectre.report import record_run, write_report
@@ -110,6 +111,10 @@ def main(argv: list[str] | None = None) -> int:
     rollback_parser.add_argument("service", help="Service name")
     rollback_parser.add_argument("environment", help="Target environment")
 
+    dash_parser = sub.add_parser("dashboard", help="Start web dashboard")
+    dash_parser.add_argument("--port", type=int, default=8080, help="HTTP port")
+    dash_parser.add_argument("--host", default="127.0.0.1", help="Bind address")
+
     args = parser.parse_args(argv)
 
     if args.command == "deploy":
@@ -205,6 +210,10 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{icon} {r.stage}: {r.message}")
         failed = any(r.status == DeploymentStatus.failed for r in results)
         return 1 if failed else 0
+
+    elif args.command == "dashboard":
+        serve_dashboard(host=args.host, port=args.port)
+        return 0
 
     return 0
 
