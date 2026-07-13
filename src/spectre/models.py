@@ -54,6 +54,8 @@ class Service:
     push_image: bool = False
     registry: str = ""
     image_name: str = ""
+    secrets_file: str = ""
+    secrets: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Service:
@@ -68,6 +70,7 @@ class Environment:
     kube_namespace: str | None = None
     kube_context: str | None = None
     env_vars: dict[str, str] = field(default_factory=dict)
+    secrets: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Environment:

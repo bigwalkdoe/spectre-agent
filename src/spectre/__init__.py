@@ -10,6 +10,7 @@ from spectre import (
     orchestrator,
     report,
     rollback,
+    secrets,
     state,
     strategies,
 )
@@ -22,10 +23,11 @@ __all__ = [
     "models",
     "orchestrator",
     "builder",
-    "deployer",
     "checker",
-    "rollback",
-    "state",
+    "deployer",
     "report",
+    "rollback",
+    "secrets",
+    "state",
     "strategies",
 ]

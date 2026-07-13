@@ -10,6 +10,7 @@ from spectre.models import Deployment, DeploymentStatus, Strategy
 from spectre.orchestrator import run as run_deploy
 from spectre.report import record_run, write_report
 from spectre.rollback import rollback
+from spectre.secrets import collect_secrets, merge_secrets
 from spectre.state import list_deployments
 
 
@@ -95,6 +96,10 @@ def main(argv: list[str] | None = None) -> int:
         "--push", action="store_true", help="Push image to registry after build"
     )
     deploy_parser.add_argument("--force", action="store_true", help="Bypass deployment lock")
+    deploy_parser.add_argument(
+        "--secrets", metavar="PATH",
+        help="Path to .env file with secrets (merged with config secrets)",
+    )
     deploy_parser.add_argument("--ci", action="store_true", help="CI mode (GitHub Actions output)")
     deploy_parser.add_argument("--report", metavar="PATH", help="Write deployment report")
     deploy_parser.add_argument(
@@ -137,6 +142,14 @@ def main(argv: list[str] | None = None) -> int:
         }
         env = resolve_environment(args.environment, args.environments, env_overrides)
 
+        secrets = collect_secrets(
+            service_secrets=service.secrets,
+            environment_secrets=env.secrets,
+            secrets_file=service.secrets_file or None,
+            cli_secrets_file=args.secrets,
+        )
+        merged_env = merge_secrets(env.env_vars or None, secrets)
+
         health_url = args.health_url or f"http://localhost:{service.port}{service.health_endpoint}"
 
         if args.ci:
@@ -155,7 +168,7 @@ def main(argv: list[str] | None = None) -> int:
             dockerfile=service.dockerfile,
             namespace=env.kube_namespace,
             kube_context=env.kube_context,
-            env_vars=env.env_vars or None,
+            env_vars=merged_env,
             registry=service.registry,
             image_name=service.image_name,
             push_image=service.push_image,
