@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-import pytest
-from packages.core.kernel import Kernel, Container
-from packages.core.service_bus import ServiceBus, ServiceInfo
-from packages.core.config import SpectreConfig, load_config, save_config
-from packages.core.agent import BaseAgent, AgentContext
-from pathlib import Path
 import tempfile
+from pathlib import Path
 
+import pytest
+
+from packages.core.agent import AgentContext, BaseAgent
+from packages.core.config import SpectreConfig, load_config, save_config
+from packages.core.kernel import Container, Kernel
+from packages.core.service_bus import ServiceBus
 
 # ── Container ─────────────────────────────────────────────────────────────
 

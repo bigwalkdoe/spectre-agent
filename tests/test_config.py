@@ -5,10 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from packages.config.settings import (
-    SpectreSettings,
-    OllamaConfig,
-    MonitoringConfig,
     AgentConfig,
+    MonitoringConfig,
+    OllamaConfig,
+    SpectreSettings,
     WorkflowSchedule,
     load_settings,
     save_settings,

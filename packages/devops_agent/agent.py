@@ -2,8 +2,9 @@ import shutil
 import subprocess
 import time
 from typing import Any
+
 from packages.core.agent import BaseAgent
-from packages.memory.db import save_maintenance_record, MaintenanceRecord
+from packages.memory.db import MaintenanceRecord, save_maintenance_record
 
 
 class DevOpsAgent(BaseAgent):

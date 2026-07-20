@@ -6,9 +6,9 @@ import logging
 import sys
 from typing import Any
 
+from packages.config.settings import load_settings
 from packages.core.kernel import Kernel
 from packages.core.service_bus import ServiceBus
-from packages.config.settings import load_settings
 from packages.memory.db import init_db
 from packages.monitoring_agent.agent import MonitoringAgent
 from packages.workflow_engine.engine import WorkflowEngine

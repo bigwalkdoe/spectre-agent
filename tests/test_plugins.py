@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from packages.plugins.loader import PluginLoader, BasePlugin
+from packages.plugins.loader import BasePlugin, PluginLoader
 
 
 def test_plugin_loader_default_dir() -> None:

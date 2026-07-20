@@ -4,7 +4,7 @@ from typing import Any
 import psutil
 
 from packages.core.agent import BaseAgent
-from packages.memory.db import MaintenanceRecord, SystemMetric, save_metric, save_maintenance_record
+from packages.memory.db import MaintenanceRecord, SystemMetric, save_maintenance_record, save_metric
 
 
 class MonitoringAgent(BaseAgent):

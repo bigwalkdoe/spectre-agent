@@ -4,9 +4,29 @@ build-backend = "hatchling.build"
 
 [project]
 name = "spectre"
-version = "0.2.0"
-description = "Spectre - autonomous system maintenance and engineering operations platform for Fedora"
+version = "0.3.0"
+description = "Spectre - Autonomous AI Engineering Operating System for Fedora Linux"
+readme = "README.md"
+license = {text = "MIT"}
 requires-python = ">=3.11"
+authors = [
+    {name = "Spectre Contributors"},
+]
+keywords = ["linux", "automation", "ai", "engineering", "operations", "fedora", "security", "monitoring"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: System :: Systems Administration",
+    "Topic :: Security",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+]
 dependencies = [
     "typer>=0.12.0",
     "rich>=13.7.0",
@@ -25,11 +45,19 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "ruff",
-    "mypy",
-    "pytest",
-    "pytest-asyncio",
+    "ruff>=0.4.0",
+    "mypy>=1.10.0",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=5.0.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/bigwalkdoe/spectre"
+Documentation = "https://github.com/bigwalkdoe/spectre/tree/main/docs"
+Repository = "https://github.com/bigwalkdoe/spectre"
+Issues = "https://github.com/bigwalkdoe/spectre/issues"
+Changelog = "https://github.com/bigwalkdoe/spectre/releases"
 
 [project.scripts]
 spectre = "apps.cli.main:main"
@@ -37,6 +65,7 @@ spectre = "apps.cli.main:main"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+addopts = "-v --tb=short"
 
 [tool.hatch.build.targets.wheel]
 packages = ["apps", "packages"]
@@ -54,3 +83,15 @@ warn_unused_ignores = true
 warn_return_any = false
 disallow_untyped_defs = true
 ignore_missing_imports = true
+
+[tool.coverage.run]
+source = ["packages", "apps"]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if __name__ == .__main__.",
+    "pass",
+]

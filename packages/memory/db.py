@@ -1,7 +1,8 @@
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Generator
-from sqlmodel import SQLModel, Field, Session, create_engine, select
+
+from sqlmodel import Field, Session, SQLModel, create_engine, select
 
 # Define the database path in the user's home or local workspace directory
 DB_DIR = Path.home() / ".config" / "spectre"

@@ -2,30 +2,23 @@
 
 from __future__ import annotations
 
-import json
 import sys
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Callable, Optional
 
 import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
-from rich.text import Text
 
 from packages.config.settings import load_settings
 from packages.core.kernel import Kernel
 from packages.core.service_bus import ServiceBus
 from packages.memory.db import (
-    init_db,
-    get_reports,
-    get_workflow_runs,
-    get_decisions,
-    save_report,
-    save_decision,
     Report,
-    Decision,
+    init_db,
+    save_report,
 )
 from packages.workflow_engine.engine import WorkflowEngine
 
@@ -186,13 +179,116 @@ def core() -> None:
 def plugins(
     list_plugins: bool = typer.Option(False, "--list", help="List loaded plugins"),
     load: str | None = typer.Option(None, "--load", help="Load plugins from directory"),
+    install: str | None = typer.Option(None, "--install", help="Install plugin from directory"),
+    search: str | None = typer.Option(None, "--search", help="Search for plugins"),
+    remove: str | None = typer.Option(None, "--remove", help="Remove plugin by name"),
 ) -> None:
     """Manage Spectre plugins."""
     init_db()
 
-    if load:
-        from packages.plugins.loader import PluginLoader
+    if remove:
+        from sqlmodel import Session, select
+
+        from packages.memory.db import PluginRecord
+        from packages.memory.db import engine as db_engine
+
+        with Session(db_engine) as session:
+            plugin = session.exec(
+                select(PluginRecord).where(PluginRecord.name == remove)
+            ).first()
+            if not plugin:
+                console.print(f"[yellow]Plugin '{remove}' not found[/yellow]")
+                return
+            session.delete(plugin)
+            session.commit()
+            console.print(f"[green]Removed plugin '{remove}'[/green]")
+
+    if search:
+        # Search for plugins in common locations
         from pathlib import Path
+
+        import yaml
+
+        search_paths = [
+            Path.home() / ".config" / "spectre" / "plugins",
+            Path("/usr/share/spectre/plugins"),
+            Path("/opt/spectre/plugins"),
+        ]
+
+        found = []
+        for search_path in search_paths:
+            if not search_path.is_dir():
+                continue
+            for plugin_dir in search_path.iterdir():
+                if not plugin_dir.is_dir():
+                    continue
+                manifest = plugin_dir / "manifest.yaml"
+                if manifest.exists():
+                    try:
+                        with open(manifest) as f:
+                            data = yaml.safe_load(f)
+                        if search.lower() in data.get("name", "").lower() or search.lower() in data.get("description", "").lower():
+                            found.append({
+                                "name": data.get("name", plugin_dir.name),
+                                "version": data.get("version", "unknown"),
+                                "description": data.get("description", ""),
+                                "path": str(plugin_dir),
+                            })
+                    except Exception:
+                        pass
+
+        if found:
+            table = Table(title=f"Plugins matching '{search}'", show_header=True)
+            table.add_column("Name", style="cyan")
+            table.add_column("Version", style="green")
+            table.add_column("Description")
+            table.add_column("Path", style="dim")
+            for plugin in found:
+                table.add_row(plugin["name"], plugin["version"], plugin["description"][:50], plugin["path"])
+            console.print(table)
+        else:
+            console.print(f"[dim]No plugins found matching '{search}'[/dim]")
+            console.print("[dim]Searched in: ~/.config/spectre/plugins, /usr/share/spectre/plugins, /opt/spectre/plugins[/dim]")
+
+    elif install:
+        from pathlib import Path
+
+        from packages.memory.db import PluginRecord, save_plugin_record
+        from packages.plugins.loader import PluginLoader
+
+        plugin_dir = Path(install)
+        if not plugin_dir.is_dir():
+            console.print(f"[red]Directory not found: {install}[/red]")
+            raise typer.Exit(1)
+
+        # Check for manifest
+        manifest_file = plugin_dir / "manifest.yaml"
+        if not manifest_file.exists():
+            manifest_file = plugin_dir / "manifest.json"
+        if not manifest_file.exists():
+            console.print(f"[red]No manifest.yaml or manifest.json found in {install}[/red]")
+            raise typer.Exit(1)
+
+        # Load the plugin
+        loader = PluginLoader(plugins_dir=plugin_dir.parent)
+        loaded = loader.load_plugins()
+        if loaded:
+            plugin = loaded[0]
+            save_plugin_record(PluginRecord(
+                name=plugin.manifest.name,
+                version=plugin.manifest.version,
+                status="installed",
+                permissions=",".join(plugin.manifest.permissions),
+            ))
+            console.print(f"[green]Installed plugin: {plugin.manifest.name} v{plugin.manifest.version}[/green]")
+        else:
+            console.print("[red]Failed to load plugin[/red]")
+            raise typer.Exit(1)
+
+    elif load:
+        from pathlib import Path
+
+        from packages.plugins.loader import PluginLoader
 
         loader = PluginLoader(plugins_dir=Path(load))
         loaded = loader.load_plugins()
@@ -228,15 +324,25 @@ def plugins(
 
 
 @app.command()
-def doctor() -> None:
+def doctor(
+    fix: bool = typer.Option(False, "--fix", help="Auto-fix issues"),
+) -> None:
     """Run system diagnostics and verify Kernel + ServiceBus health."""
     init_db()
     console.print(Panel("[bold]Spectre Doctor[/bold]", style="blue"))
 
+    issues = []
+
     # Kernel status
     k = _get_kernel()
-    console.print(f"[bold]Kernel:[/bold] {'running' if k.running else 'stopped'}")
+    kernel_status = "running" if k.running else "stopped"
+    console.print(f"[bold]Kernel:[/bold] {kernel_status}")
     console.print(f"  Services: {', '.join(k.container.list_services())}")
+
+    if not k.running and fix:
+        console.print("[dim]Starting kernel...[/dim]")
+        k.start()
+        console.print("[green]Kernel started[/green]")
 
     # ServiceBus status
     bus = _get_service_bus()
@@ -249,13 +355,18 @@ def doctor() -> None:
     engine = _get_engine()
     console.print(f"\n[bold]WorkflowEngine:[/bold] {len(engine.agents)} agents")
     for name in engine.agents:
-        status = "ok" if engine.resolve_agent(name) else "missing"
+        agent = engine.resolve_agent(name)
+        status = "ok" if agent else "missing"
         console.print(f"  - {name}: {status}")
+        if not agent:
+            issues.append(f"Agent '{name}' not registered with ServiceBus")
 
     # System health
     console.print("\n[bold]System Health:[/bold]")
     result = _run_agent_action("linux", "system-health-check")
     _print_result("system-health-check", result)
+    if result.get("status") == "failed":
+        issues.append("System health check failed")
 
     # Container status
     result = _run_agent_action("devops", "podman-status")
@@ -269,7 +380,33 @@ def doctor() -> None:
     result = _run_agent_action("developer", "git-status")
     _print_result("git-status", result)
 
-    console.print("\n[bold green]Doctor check complete.[/bold green]")
+    # Summary
+    if issues:
+        console.print(f"\n[bold yellow]Found {len(issues)} issue(s):[/bold yellow]")
+        for issue in issues:
+            console.print(f"  [yellow]![/yellow] {issue}")
+
+        if fix:
+            console.print("\n[bold]Attempting fixes...[/bold]")
+            fixed = 0
+
+            # Try to re-register missing agents
+            for name in engine.agents:
+                if not engine.resolve_agent(name):
+                    agent = engine.agents[name]
+                    if hasattr(agent, 'initialize'):
+                        try:
+                            agent.initialize()
+                            fixed += 1
+                            console.print(f"  [green]✓ Re-registered {name}[/green]")
+                        except Exception as e:
+                            console.print(f"  [red]✗ Failed to re-register {name}: {e}[/red]")
+
+            console.print(f"\n[green]Fixed {fixed}/{len(issues)} issues[/green]")
+        else:
+            console.print("\n[dim]Run with --fix to attempt automatic repairs[/dim]")
+    else:
+        console.print("\n[bold green]No issues found. System healthy![/bold green]")
 
 
 # ── health ────────────────────────────────────────────────────────────────────
@@ -290,39 +427,72 @@ def health() -> None:
 
 
 @app.command()
-def status() -> None:
+def status(
+    json_output: bool = typer.Option(False, "--json", "-j", help="Output as JSON"),
+    watch: int = typer.Option(0, "--watch", "-w", help="Refresh every N seconds (0=once)"),
+) -> None:
     """Show overall system status."""
     init_db()
-    engine = _get_engine()
 
-    table = Table(title="Spectre Status", show_header=True)
-    table.add_column("Component", style="cyan")
-    table.add_column("Status", style="green")
-    table.add_column("Details")
+    def get_status() -> dict[str, Any]:
+        results = {}
 
-    # Linux
-    result = _run_agent_action("linux", "system-health-check")
-    table.add_row("Linux", result.get("status", "?"), result.get("log_output", ""))
+        # Linux
+        result = _run_agent_action("linux", "system-health-check")
+        results["linux"] = result
 
-    # DevOps
-    result = _run_agent_action("devops", "podman-status")
-    table.add_row("Podman", result.get("status", "?"), result.get("log_output", ""))
+        # DevOps
+        result = _run_agent_action("devops", "podman-status")
+        results["podman"] = result
 
-    result = _run_agent_action("devops", "docker-status")
-    table.add_row("Docker", result.get("status", "?"), result.get("log_output", ""))
+        result = _run_agent_action("devops", "docker-status")
+        results["docker"] = result
 
-    # Security
-    result = _run_agent_action("security", "selinux-audit")
-    table.add_row("SELinux", result.get("status", "?"), result.get("log_output", ""))
+        # Security
+        result = _run_agent_action("security", "selinux-audit")
+        results["selinux"] = result
 
-    result = _run_agent_action("security", "firewall-audit")
-    table.add_row("Firewall", result.get("status", "?"), result.get("log_output", ""))
+        result = _run_agent_action("security", "firewall-audit")
+        results["firewall"] = result
 
-    # AI
-    result = _run_agent_action("ai", "ollama-ping")
-    table.add_row("Ollama", result.get("status", "?"), result.get("log_output", ""))
+        # AI
+        result = _run_agent_action("ai", "ollama-ping")
+        results["ollama"] = result
 
-    console.print(table)
+        return results
+
+    def print_status(results: dict[str, Any]) -> None:
+        table = Table(title="Spectre Status", show_header=True)
+        table.add_column("Component", style="cyan")
+        table.add_column("Status", style="green")
+        table.add_column("Details")
+
+        for name, data in results.items():
+            table.add_row(name.title(), data.get("status", "?"), data.get("log_output", ""))
+
+        console.print(table)
+
+    if watch > 0:
+        console.print(f"[dim]Watching every {watch}s (Ctrl+C to stop)[/dim]")
+        try:
+            while True:
+                results = get_status()
+                if json_output:
+                    import json
+                    print(json.dumps(results, indent=2))
+                else:
+                    console.clear()
+                    print_status(results)
+                time.sleep(watch)
+        except KeyboardInterrupt:
+            console.print("\n[dim]Stopped watching.[/dim]")
+    else:
+        results = get_status()
+        if json_output:
+            import json
+            print(json.dumps(results, indent=2))
+        else:
+            print_status(results)
 
 
 # ── monitor ───────────────────────────────────────────────────────────────────
@@ -419,16 +589,67 @@ def optimize() -> None:
 
 
 @app.command()
-def security(audit: bool = typer.Option(False, "--audit", help="Run full security audit")) -> None:
+def security(
+    audit: bool = typer.Option(False, "--audit", help="Run full security audit"),
+    fix: bool = typer.Option(False, "--fix", help="Auto-fix security issues"),
+) -> None:
     """Security status and auditing."""
     init_db()
 
-    if audit:
-        console.print(Panel("[bold]Running full security audit[/bold]", style="red"))
+    if audit or fix:
+        if audit:
+            console.print(Panel("[bold]Running full security audit[/bold]", style="red"))
         actions = ["selinux-audit", "firewall-audit", "ports-audit", "secrets-scan", "ssh-audit"]
+        issues = []
         for action in actions:
             result = _run_agent_action("security", action)
             _print_result(action, result)
+            if result.get("status") == "failed" or "WARNING" in result.get("log_output", "") or "CRITICAL" in result.get("log_output", ""):
+                issues.append({"action": action, "output": result.get("log_output", "")})
+
+        if fix and issues:
+            console.print(f"\n[bold]Found {len(issues)} security issue(s)[/bold]")
+            console.print("[dim]Attempting fixes...[/dim]")
+            fixed = 0
+
+            for issue in issues:
+                action = issue["action"]
+                output = issue["output"]
+
+                # SELinux permissive -> try to set to enforcing
+                if action == "selinux-audit" and "Permissive" in output:
+                    try:
+                        import subprocess
+                        res = subprocess.run(["sudo", "setenforce", "1"], capture_output=True, text=True, timeout=5)
+                        if res.returncode == 0:
+                            console.print("  [green]✓ Set SELinux to Enforcing[/green]")
+                            fixed += 1
+                        else:
+                            console.print(f"  [red]✗ Failed to set SELinux: {res.stderr}[/red]")
+                    except Exception as e:
+                        console.print(f"  [red]✗ SELinux fix failed: {e}[/red]")
+
+                # Firewall not running -> try to start
+                elif action == "firewall-audit" and "not active" in output.lower():
+                    try:
+                        import subprocess
+                        res = subprocess.run(["sudo", "systemctl", "start", "firewalld"], capture_output=True, text=True, timeout=10)
+                        if res.returncode == 0:
+                            console.print("  [green]✓ Started firewalld[/green]")
+                            fixed += 1
+                        else:
+                            console.print(f"  [red]✗ Failed to start firewalld: {res.stderr}[/red]")
+                    except Exception as e:
+                        console.print(f"  [red]✗ Firewalld fix failed: {e}[/red]")
+
+                # SSH root login -> recommend manual fix
+                elif action == "ssh-audit" and "root login" in output.lower():
+                    console.print("  [yellow]![/yellow] SSH root login enabled - edit /etc/ssh/sshd_config manually")
+                    console.print("    Set: PermitRootLogin no")
+
+            console.print(f"\n[green]Fixed {fixed}/{len(issues)} issues[/green]")
+        elif issues:
+            console.print(f"\n[yellow]Found {len(issues)} security issue(s). Run with --fix to attempt repairs.[/yellow]")
     else:
         result = _run_agent_action("security", "selinux-audit")
         _print_result("selinux-audit", result)
@@ -682,7 +903,7 @@ def config(
         return
 
     if set_key and set_value:
-        from packages.memory.db import save_configuration, Configuration
+        from packages.memory.db import Configuration, save_configuration
         save_configuration(Configuration(key=set_key, value=set_value, profile=settings.profile))
         console.print(f"[green]Set {set_key} = {set_value}[/green]")
         return
@@ -733,7 +954,8 @@ def events(
 @app.command()
 def version() -> None:
     """Show Spectre version and system information."""
-    from importlib.metadata import version as get_version, PackageNotFoundError
+    from importlib.metadata import PackageNotFoundError
+    from importlib.metadata import version as get_version
 
     try:
         spectre_version = get_version("spectre")
@@ -741,6 +963,7 @@ def version() -> None:
         spectre_version = "0.2.0-dev"
 
     import platform
+
     import psutil
 
     table = Table(title="Spectre Version Info", show_header=False)
@@ -764,7 +987,6 @@ def daemon(
 ) -> None:
     """Manage the Spectre background daemon."""
     import subprocess
-    import os
 
     service_name = "spectre"
 
@@ -816,7 +1038,7 @@ def init(
     force: bool = typer.Option(False, "--force", help="Overwrite existing config"),
 ) -> None:
     """Initialize Spectre configuration and directories."""
-    from packages.config.settings import DEFAULT_CONFIG_PATH, save_settings, SpectreSettings
+    from packages.config.settings import DEFAULT_CONFIG_PATH, SpectreSettings, save_settings
 
     # Create directories
     dirs = [
@@ -862,6 +1084,137 @@ def init(
     console.print("  3. spectre workflows    - List available workflows")
 
 
+# ── schedule ──────────────────────────────────────────────────────────────────
+
+
+@app.command()
+def schedule(
+    action: str = typer.Argument("list", help="Action: list, add, remove, run"),
+    name: str = typer.Option("", "--name", "-n", help="Task name"),
+    cron: str = typer.Option("", "--cron", "-c", help="Cron expression (e.g., '0 2 * * *')"),
+    interval: str = typer.Option("", "--interval", "-i", help="Interval (e.g., 'every 30m')"),
+    workflow: str = typer.Option("", "--workflow", "-w", help="Workflow to run"),
+) -> None:
+    """Manage scheduled tasks."""
+    import json
+
+    from sqlmodel import Session, select
+
+    from packages.core.scheduler import TaskScheduler
+    from packages.memory.db import Configuration
+    from packages.memory.db import engine as db_engine
+
+    scheduler = TaskScheduler()
+
+    # Load scheduled tasks from config
+    with Session(db_engine) as session:
+        config = session.exec(
+            select(Configuration).where(Configuration.key == "scheduled_tasks")
+        ).first()
+        if config:
+            try:
+                tasks = json.loads(config.value)
+                for task_name, task_config in tasks.items():
+                    def make_callback(wf: str) -> Callable[[], Any]:
+                        return lambda: _get_engine().run_workflow(wf)
+                    scheduler.add_task(task_name, task_config["schedule"], make_callback(task_config["workflow"]))
+            except Exception:
+                pass
+
+    if action == "list":
+        tasks = scheduler.get_tasks()
+        if not tasks:
+            console.print("[dim]No scheduled tasks configured[/dim]")
+            console.print("\n[yellow]Usage:[/yellow]")
+            console.print("  spectre schedule add --name health --cron '0 * * * *' --workflow morning-startup")
+            console.print("  spectre schedule add --name backup --interval 'every 6h' --workflow backup")
+            return
+
+        table = Table(title="Scheduled Tasks", show_header=True)
+        table.add_column("Name", style="cyan")
+        table.add_column("Schedule", style="green")
+        table.add_column("Workflow")
+        table.add_column("Enabled")
+        table.add_column("Last Run")
+
+        for task in tasks:
+            last_run = "Never" if task.last_run is None else __import__("datetime").datetime.fromtimestamp(task.last_run).strftime("%Y-%m-%d %H:%M")
+            table.add_row(task.name, task.schedule, getattr(task, 'workflow', '?'), "Yes" if task.enabled else "No", last_run)
+        console.print(table)
+
+    elif action == "add":
+        if not name or not workflow:
+            console.print("[red]--name and --workflow are required[/red]")
+            raise typer.Exit(1)
+        if not cron and not interval:
+            console.print("[red]--cron or --interval is required[/red]")
+            raise typer.Exit(1)
+
+        schedule_expr = cron if cron else interval
+
+        # Save to config
+        with Session(db_engine) as session:
+            config = session.exec(
+                select(Configuration).where(Configuration.key == "scheduled_tasks")
+            ).first()
+            tasks = json.loads(config.value) if config else {}
+            tasks[name] = {"schedule": schedule_expr, "workflow": workflow, "enabled": True}
+            if config:
+                config.value = json.dumps(tasks)
+                session.add(config)
+            else:
+                session.add(Configuration(key="scheduled_tasks", value=json.dumps(tasks), profile="default"))
+            session.commit()
+
+        console.print(f"[green]Added scheduled task '{name}': {schedule_expr} -> {workflow}[/green]")
+
+    elif action == "remove":
+        if not name:
+            console.print("[red]--name is required[/red]")
+            raise typer.Exit(1)
+
+        with Session(db_engine) as session:
+            config = session.exec(
+                select(Configuration).where(Configuration.key == "scheduled_tasks")
+            ).first()
+            if config:
+                tasks = json.loads(config.value)
+                if name in tasks:
+                    del tasks[name]
+                    config.value = json.dumps(tasks)
+                    session.add(config)
+                    session.commit()
+                    console.print(f"[green]Removed scheduled task '{name}'[/green]")
+                else:
+                    console.print(f"[yellow]Task '{name}' not found[/yellow]")
+            else:
+                console.print("[yellow]No scheduled tasks configured[/yellow]")
+
+    elif action == "run":
+        if not name:
+            console.print("[red]--name is required[/red]")
+            raise typer.Exit(1)
+
+        # Find and run the task immediately
+        with Session(db_engine) as session:
+            config = session.exec(
+                select(Configuration).where(Configuration.key == "scheduled_tasks")
+            ).first()
+            if config:
+                tasks = json.loads(config.value)
+                if name in tasks:
+                    wf = tasks[name]["workflow"]
+                    console.print(f"[dim]Running workflow '{wf}'...[/dim]")
+                    result = _get_engine().run_workflow(wf)
+                    status = result.get("status", "unknown")
+                    icon = "[green]✓[/green]" if status == "success" else "[red]✗[/red]"
+                    console.print(f"{icon} {name}: {status}")
+                else:
+                    console.print(f"[yellow]Task '{name}' not found[/yellow]")
+            else:
+                console.print("[yellow]No scheduled tasks configured[/yellow]")
+
+
 # ── logs ──────────────────────────────────────────────────────────────────────
 
 
@@ -898,12 +1251,14 @@ def export(
     output: str = typer.Option("spectre-export.json", "--output", "-o", help="Output file"),
     data_type: str = typer.Option("all", "--type", "-t", help="Data type: all, events, reports, workflows, config"),
     limit: int = typer.Option(100, "--limit", help="Max records per type"),
+    format: str = typer.Option("json", "--format", "-f", help="Output format: json, csv"),
 ) -> None:
-    """Export Spectre data to JSON."""
+    """Export Spectre data to JSON or CSV."""
+    import csv
     import json
 
     init_db()
-    from packages.memory.db import get_events, get_reports, get_workflow_runs, get_configuration
+    from packages.memory.db import get_events, get_reports, get_workflow_runs
 
     export_data: dict[str, Any] = {"version": "0.2.0", "exported_at": __import__("datetime").datetime.now().isoformat()}
 
@@ -946,16 +1301,206 @@ def export(
         ]
 
     if data_type in ("all", "config"):
-        from packages.memory.db import engine as db_engine, Configuration
-        from sqlmodel import select, Session
+        from sqlmodel import Session, select
+
+        from packages.memory.db import Configuration
+        from packages.memory.db import engine as db_engine
 
         with Session(db_engine) as session:
             configs = list(session.exec(select(Configuration).limit(limit)))
         export_data["config"] = [{"key": c.key, "value": c.value, "profile": c.profile} for c in configs]
 
-    Path(output).write_text(json.dumps(export_data, indent=2))
-    console.print(f"[green]Exported data to {output}[/green]")
-    console.print(f"[dim]Events: {len(export_data.get('events', []))}, Reports: {len(export_data.get('reports', []))}, Workflows: {len(export_data.get('workflows', []))}, Config: {len(export_data.get('config', []))}[/dim]")
+    if format == "csv":
+        # CSV export - flatten all data into a single CSV
+        output_path = Path(output)
+        if not output_path.suffix:
+            output_path = output_path.with_suffix(".csv")
+
+        rows = []
+        for event in export_data.get("events", []):
+            rows.append({"type": "event", "timestamp": event["timestamp"], "key": event["event_type"], "value": event.get("source", "")})
+        for report in export_data.get("reports", []):
+            rows.append({"type": "report", "timestamp": report["timestamp"], "key": report["type"], "value": report["content"][:100]})
+        for run in export_data.get("workflows", []):
+            rows.append({"type": "workflow", "timestamp": run["timestamp"], "key": run["workflow"], "value": run["status"]})
+        for config in export_data.get("config", []):
+            rows.append({"type": "config", "timestamp": "", "key": config["key"], "value": config["value"]})
+
+        if rows:
+            with open(output_path, "w", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=["type", "timestamp", "key", "value"])
+                writer.writeheader()
+                writer.writerows(rows)
+        console.print(f"[green]Exported {len(rows)} rows to {output_path}[/green]")
+    else:
+        # JSON export
+        output_path = Path(output)
+        if not output_path.suffix:
+            output_path = output_path.with_suffix(".json")
+        output_path.write_text(json.dumps(export_data, indent=2))
+        console.print(f"[green]Exported data to {output_path}[/green]")
+        console.print(f"[dim]Events: {len(export_data.get('events', []))}, Reports: {len(export_data.get('reports', []))}, Workflows: {len(export_data.get('workflows', []))}, Config: {len(export_data.get('config', []))}[/dim]")
+
+
+# ── import ────────────────────────────────────────────────────────────────────
+
+
+@app.command(name="import")
+def import_data(
+    input_file: str = typer.Argument(..., help="Input file to import"),
+    data_type: str = typer.Option("all", "--type", "-t", help="Data type: all, events, reports, config"),
+) -> None:
+    """Import Spectre data from JSON."""
+    import json
+
+    input_path = Path(input_file)
+    if not input_path.exists():
+        console.print(f"[red]File not found: {input_file}[/red]")
+        raise typer.Exit(1)
+
+    try:
+        data = json.loads(input_path.read_text())
+    except json.JSONDecodeError as e:
+        console.print(f"[red]Invalid JSON: {e}[/red]")
+        raise typer.Exit(1)
+
+    init_db()
+    from sqlmodel import Session
+
+    from packages.memory.db import (
+        Configuration,
+        EventLog,
+        Report,
+        save_event,
+        save_report,
+    )
+    from packages.memory.db import (
+        engine as db_engine,
+    )
+
+    imported = {"events": 0, "reports": 0, "config": 0}
+
+    with Session(db_engine) as session:
+        if data_type in ("all", "events") and "events" in data:
+            for event in data["events"]:
+                try:
+                    save_event(EventLog(
+                        event_type=event["event_type"],
+                        source=event.get("source", "import"),
+                        severity=event.get("severity", "info"),
+                        data_json=json.dumps(event.get("data", {})),
+                    ))
+                    imported["events"] += 1
+                except Exception:
+                    pass
+
+        if data_type in ("all", "reports") and "reports" in data:
+            for report in data["reports"]:
+                try:
+                    save_report(Report(
+                        report_type=report.get("type", "unknown"),
+                        content=report.get("content", ""),
+                        format="json",
+                    ))
+                    imported["reports"] += 1
+                except Exception:
+                    pass
+
+        if data_type in ("all", "config") and "config" in data:
+            for config in data["config"]:
+                try:
+                    from packages.memory.db import save_configuration
+                    save_configuration(Configuration(
+                        key=config["key"],
+                        value=config["value"],
+                        profile=config.get("profile", "default"),
+                    ))
+                    imported["config"] += 1
+                except Exception:
+                    pass
+
+    total = sum(imported.values())
+    console.print(f"[green]Imported {total} records from {input_file}[/green]")
+    console.print(f"[dim]Events: {imported['events']}, Reports: {imported['reports']}, Config: {imported['config']}[/dim]")
+
+
+# ── dashboard ─────────────────────────────────────────────────────────────────
+
+
+@app.command()
+def dashboard(
+    refresh: int = typer.Option(5, "--refresh", "-r", help="Refresh interval in seconds"),
+) -> None:
+    """Interactive TUI dashboard."""
+    from rich.layout import Layout
+    from rich.live import Live
+    from rich.panel import Panel
+    from rich.text import Text
+
+    init_db()
+
+    def build_dashboard() -> Layout:
+        layout = Layout()
+        layout.split_column(
+            Layout(name="header", size=3),
+            Layout(name="body"),
+            Layout(name="footer", size=3),
+        )
+        layout["body"].split_row(
+            Layout(name="left"),
+            Layout(name="right"),
+        )
+
+        # Header
+        header = Text(" Spectre Dashboard ", style="bold white on blue")
+        layout["header"].update(Panel(header, style="blue"))
+
+        # Left: System metrics
+        try:
+            linux_agent = _get_engine().resolve_agent("linux")
+            metrics = linux_agent.observe() if linux_agent else {}
+        except Exception:
+            metrics = {}
+
+        metrics_text = Text()
+        metrics_text.append("System Metrics\n", style="bold cyan")
+        metrics_text.append(f"CPU:     {metrics.get('cpu_percent', '?')}%\n")
+        metrics_text.append(f"Memory:  {metrics.get('memory_percent', '?')}%\n")
+        metrics_text.append(f"Swap:    {metrics.get('swap_percent', '?')}%\n")
+        metrics_text.append(f"Disk:    {metrics.get('disk_percent', '?')}%\n")
+        if metrics.get('battery_percent'):
+            metrics_text.append(f"Battery: {metrics['battery_percent']}%\n")
+        if metrics.get('temperature_c'):
+            metrics_text.append(f"Temp:    {metrics['temperature_c']}°C\n")
+        layout["left"].update(Panel(metrics_text, title="System"))
+
+        # Right: Recent events
+        from packages.memory.db import get_events
+        events = get_events(limit=8)
+        events_text = Text()
+        events_text.append("Recent Events\n", style="bold cyan")
+        for event in events:
+            ts = event.timestamp.strftime("%H:%M")
+            events_text.append(f"{ts} ", style="dim")
+            events_text.append(f"{event.event_type} ", style="green")
+            events_text.append(f"({event.source})\n")
+        if not events:
+            events_text.append("No events recorded\n", style="dim")
+        layout["right"].update(Panel(events_text, title="Events"))
+
+        # Footer
+        footer = Text(f" Refreshing every {refresh}s | Press Ctrl+C to exit ", style="dim")
+        layout["footer"].update(Panel(footer, style="dim"))
+
+        return layout
+
+    try:
+        with Live(build_dashboard(), refresh_per_second=1/refresh, console=console) as live:
+            while True:
+                time.sleep(refresh)
+                live.update(build_dashboard())
+    except KeyboardInterrupt:
+        console.print("\n[dim]Dashboard stopped.[/dim]")
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
