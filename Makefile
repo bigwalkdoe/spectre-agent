@@ -1,14 +1,20 @@
-.PHONY: install lint type test
+.PHONY: install lint type test run-api run-daemon
 
 install:
 	python -m venv .venv
 	.venv/bin/pip install -e ".[dev]"
 
 lint:
-	.venv/bin/ruff check src tests
+	ruff check packages apps tests
 
 type:
-	.venv/bin/mypy src
+	mypy packages apps --ignore-missing-imports
 
 test:
-	.venv/bin/pytest
+	pytest tests/ -v
+
+run-api:
+	uvicorn apps.api.main:app --reload --host 0.0.0.0 --port 8080
+
+run-daemon:
+	python -m apps.daemon.main

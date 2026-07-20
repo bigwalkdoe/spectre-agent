@@ -5,22 +5,41 @@ build-backend = "hatchling.build"
 [project]
 name = "spectre"
 version = "0.2.0"
-description = "Deployment orchestrator for containerized services"
+description = "Spectre - autonomous system maintenance and engineering operations platform for Fedora"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "typer>=0.12.0",
+    "rich>=13.7.0",
+    "pydantic>=2.7.0",
+    "sqlmodel>=0.0.19",
+    "psutil>=5.9.0",
+    "aiofiles>=23.2.0",
+    "httpx>=0.27.0",
+    "structlog>=24.1.0",
+    "pyyaml>=6.0.0",
+    "watchdog>=4.0.0",
+    "gitpython>=3.1.0",
+    "fastapi>=0.111.0",
+    "uvicorn>=0.30.0",
+]
 
 [project.optional-dependencies]
-dev = ["ruff", "mypy", "pytest"]
+dev = [
+    "ruff",
+    "mypy",
+    "pytest",
+    "pytest-asyncio",
+]
 
 [project.scripts]
-spectre = "spectre.cli:main"
+spectre = "apps.cli.main:main"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/spectre"]
+packages = ["apps", "packages"]
 
 [tool.ruff]
 line-length = 100
@@ -34,3 +53,4 @@ python_version = "3.11"
 warn_unused_ignores = true
 warn_return_any = false
 disallow_untyped_defs = true
+ignore_missing_imports = true

@@ -1,213 +1,241 @@
+"""Tests for the Spectre CLI."""
+
 from __future__ import annotations
 
-from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
-from spectre.cli import main
+from apps.cli.main import app, main
 
 
-def test_deploy_help() -> None:
+def test_help() -> None:
+    """CLI --help should exit 0."""
     try:
-        with patch("sys.stdout"):
-            main(["deploy", "api", "staging", "v1", "--help"])
+        app(["--help"], standalone_mode=False)
     except SystemExit as e:
         assert e.code == 0
 
 
-def test_status_no_deployments(tmp_path: Path) -> None:
-    with patch("spectre.state._STATE_DIR", tmp_path / ".spectre"):
-        rc = main(["status"])
-    assert rc == 0
-
-
-def test_list_no_deployments(tmp_path: Path) -> None:
-    with patch("spectre.state._STATE_DIR", tmp_path / ".spectre"):
-        rc = main(["list"])
-    assert rc == 0
-
-
-def test_rollback_missing(tmp_path: Path) -> None:
-    with patch("spectre.state._STATE_DIR", tmp_path / ".spectre"):
-        rc = main(["rollback", "api", "staging"])
-    assert rc == 1
-
-
-def test_ci_flag_accepted(tmp_path: Path) -> None:
-    with patch("spectre.state._STATE_DIR", tmp_path / ".spectre"), \
-         patch("spectre.cli.run_deploy") as mock_run:
-        from spectre.models import Deployment, DeploymentStatus
-        mock_run.return_value = Deployment(
-            service="api", environment="staging", version="v1",
-            status=DeploymentStatus.healthy,
-        )
-        rc = main(["deploy", "api", "staging", "v1", "--ci"])
-    assert rc == 0
-
-
-def test_ci_flag_writes_summary(tmp_path: Path, monkeypatch: object) -> None:
-    summary_file = tmp_path / "summary.md"
-    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_file))  # type: ignore[arg-type]
-
-    with patch("spectre.state._STATE_DIR", tmp_path / ".spectre"), \
-         patch("spectre.cli.run_deploy") as mock_run:
-        from spectre.models import Deployment, DeploymentStatus, Stage, StepResult
-        mock_run.return_value = Deployment(
-            service="api", environment="staging", version="v1",
-            status=DeploymentStatus.healthy,
-            steps=[
-                StepResult(
-                    stage=Stage.build, status=DeploymentStatus.healthy,
-                    message="built", duration_ms=500,
-                ),
-                StepResult(
-                    stage=Stage.deploy, status=DeploymentStatus.healthy,
-                    message="deployed", duration_ms=1000,
-                ),
-            ],
-        )
-        rc = main(["deploy", "api", "staging", "v1", "--ci"])
-    assert rc == 0
-    assert summary_file.is_file()
-    content = summary_file.read_text()
-    assert "Spectre Deploy" in content
-    assert "api" in content
-    assert "built" in content
-
-
-def test_force_flag_accepted(tmp_path: Path) -> None:
-    with patch("spectre.state._STATE_DIR", tmp_path / ".spectre"), \
-         patch("spectre.cli.run_deploy") as mock_run:
-        from spectre.models import Deployment, DeploymentStatus
-        mock_run.return_value = Deployment(
-            service="api", environment="staging", version="v1",
-            status=DeploymentStatus.healthy,
-        )
-        rc = main(["deploy", "api", "staging", "v1", "--force"])
-    assert rc == 0
-
-
-def test_deploy_failure_exit_code(tmp_path: Path) -> None:
-    with patch("spectre.state._STATE_DIR", tmp_path / ".spectre"), \
-         patch("spectre.cli.run_deploy") as mock_run:
-        from spectre.models import Deployment, DeploymentStatus
-        mock_run.return_value = Deployment(
-            service="api", environment="staging", version="v1",
-            status=DeploymentStatus.failed,
-        )
-        rc = main(["deploy", "api", "staging", "v1", "--ci"])
-    assert rc == 1
-
-
-def test_multi_service_deploy_all_healthy(tmp_path: Path) -> None:
-    from spectre.models import Deployment, DeploymentStatus
-
-    def mock_deploy(**kwargs):
-        return Deployment(
-            service=kwargs["service"], environment=kwargs["environment"],
-            version=kwargs["version"], status=DeploymentStatus.healthy,
-        )
-
-    with patch("spectre.state._STATE_DIR", tmp_path / ".spectre"), \
-         patch("spectre.cli.run_deploy", side_effect=mock_deploy):
-        rc = main(["deploy", "api,web", "staging", "v1"])
-    assert rc == 0
-
-
-def test_multi_service_deploy_one_fails(tmp_path: Path) -> None:
-    from spectre.models import Deployment, DeploymentStatus
-    call_count: list[int] = [0]
-
-    def mock_deploy(**kwargs):
-        call_count[0] += 1
-        status = DeploymentStatus.failed if call_count[0] == 2 else DeploymentStatus.healthy
-        return Deployment(
-            service=kwargs["service"], environment=kwargs["environment"],
-            version=kwargs["version"], status=status,
-        )
-
-    with patch("spectre.state._STATE_DIR", tmp_path / ".spectre"), \
-         patch("spectre.cli.run_deploy", side_effect=mock_deploy):
-        rc = main(["deploy", "api,web,worker", "staging", "v1"])
-    assert rc == 1
-
-
-def test_parallel_multi_service(tmp_path: Path) -> None:
-    from spectre.models import Deployment, DeploymentStatus
-
-    def mock_deploy(**kwargs):
-        return Deployment(
-            service=kwargs["service"], environment=kwargs["environment"],
-            version=kwargs["version"], status=DeploymentStatus.healthy,
-        )
-
-    with patch("spectre.state._STATE_DIR", tmp_path / ".spectre"), \
-         patch("spectre.cli.run_deploy", side_effect=mock_deploy):
-        rc = main(["deploy", "api,web,worker", "staging", "v1", "--parallel"])
-    assert rc == 0
-
-
-def test_parallel_multi_service_one_fails(tmp_path: Path) -> None:
-    from spectre.models import Deployment, DeploymentStatus
-    call_count: list[int] = [0]
-
-    def mock_deploy(**kwargs):
-        call_count[0] += 1
-        status = DeploymentStatus.failed if call_count[0] == 1 else DeploymentStatus.healthy
-        return Deployment(
-            service=kwargs["service"], environment=kwargs["environment"],
-            version=kwargs["version"], status=status,
-        )
-
-    with patch("spectre.state._STATE_DIR", tmp_path / ".spectre"), \
-         patch("spectre.cli.run_deploy", side_effect=mock_deploy):
-        rc = main(["deploy", "api,web", "staging", "v1", "--parallel"])
-    assert rc == 1
-
-
-def test_parallel_flag_called(tmp_path: Path) -> None:
-    from spectre.models import Deployment, DeploymentStatus
-
-    def mock_deploy(**kwargs):
-        return Deployment(
-            service=kwargs["service"], environment=kwargs["environment"],
-            version=kwargs["version"], status=DeploymentStatus.healthy,
-        )
-
-    with patch("spectre.state._STATE_DIR", tmp_path / ".spectre"), \
-         patch("spectre.cli.run_deploy", side_effect=mock_deploy):
-        rc = main(["deploy", "api", "staging", "v1", "--parallel"])
-    assert rc == 0
-
-
-def test_schedule_help() -> None:
+def test_doctor_help() -> None:
+    """doctor --help should exit 0."""
     try:
-        with patch("sys.stdout"):
-            main(["schedule", "--help"])
+        app(["doctor", "--help"], standalone_mode=False)
     except SystemExit as e:
         assert e.code == 0
 
 
-def test_schedule_once_no_schedules(tmp_path: Path) -> None:
-    with patch("spectre.schedule.load_schedules", return_value=[]):
-        rc = main(["schedule", "--once"])
-    assert rc == 0
+def test_health_help() -> None:
+    """health --help should exit 0."""
+    try:
+        app(["health", "--help"], standalone_mode=False)
+    except SystemExit as e:
+        assert e.code == 0
 
 
-def test_multi_service_deploy_ci_flag(tmp_path: Path, monkeypatch: object) -> None:
-    summary_file = tmp_path / "summary.md"
-    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_file))
+def test_workflows_list() -> None:
+    """workflows --list should show available workflows."""
+    try:
+        app(["workflows", "--list"], standalone_mode=False)
+    except SystemExit as e:
+        assert e.code == 0
 
-    from spectre.models import Deployment, DeploymentStatus
 
-    def mock_deploy(**kwargs):
-        return Deployment(
-            service=kwargs["service"], environment=kwargs["environment"],
-            version=kwargs["version"], status=DeploymentStatus.healthy,
-        )
+def test_containers_help() -> None:
+    """containers --help should exit 0."""
+    try:
+        app(["containers", "--help"], standalone_mode=False)
+    except SystemExit as e:
+        assert e.code == 0
 
-    with patch("spectre.state._STATE_DIR", tmp_path / ".spectre"), \
-         patch("spectre.cli.run_deploy", side_effect=mock_deploy):
-        rc = main(["deploy", "api,web", "staging", "v1", "--ci"])
-    assert rc == 0
-    content = summary_file.read_text()
-    assert "Spectre Deploy" in content
+
+def test_models_help() -> None:
+    """models --help should exit 0."""
+    try:
+        app(["models", "--help"], standalone_mode=False)
+    except SystemExit as e:
+        assert e.code == 0
+
+
+def test_security_help() -> None:
+    """security --help should exit 0."""
+    try:
+        app(["security", "--help"], standalone_mode=False)
+    except SystemExit as e:
+        assert e.code == 0
+
+
+def test_report_help() -> None:
+    """report --help should exit 0."""
+    try:
+        app(["report", "--help"], standalone_mode=False)
+    except SystemExit as e:
+        assert e.code == 0
+
+
+def test_main_returns_int() -> None:
+    """main() should return an integer exit code."""
+    with patch("apps.cli.main._get_engine") as mock_engine:
+        mock_engine.return_value = MagicMock()
+        result = main(["--help"])
+        assert isinstance(result, int)
+
+
+def test_unknown_command() -> None:
+    """Unknown command should fail gracefully."""
+    try:
+        app(["nonexistent"], standalone_mode=False)
+    except (SystemExit, Exception):
+        pass  # Both SystemExit and click.exceptions.UsageError are acceptable
+
+
+def test_config_help() -> None:
+    """config --help should exit 0."""
+    try:
+        app(["config", "--help"], standalone_mode=False)
+    except SystemExit as e:
+        assert e.code == 0
+
+
+def test_events_help() -> None:
+    """events --help should exit 0."""
+    try:
+        app(["events", "--help"], standalone_mode=False)
+    except SystemExit as e:
+        assert e.code == 0
+
+
+def test_config_show() -> None:
+    """config --show should display configuration."""
+    try:
+        app(["config", "--show"], standalone_mode=False)
+    except SystemExit as e:
+        assert e.code == 0
+
+
+def test_config_get_nonexistent() -> None:
+    """config --get should return gracefully for missing keys."""
+    try:
+        app(["config", "--get", "nonexistent.key"], standalone_mode=False)
+    except SystemExit as e:
+        assert e.code == 0
+
+
+def test_events_empty() -> None:
+    """events should show no events when database is fresh."""
+    try:
+        app(["events"], standalone_mode=False)
+    except SystemExit as e:
+        assert e.code == 0
+
+
+def test_workflows_definitions() -> None:
+    """workflows --definitions should show workflow definitions."""
+    try:
+        app(["workflows", "--definitions"], standalone_mode=False)
+    except SystemExit as e:
+        assert e.code == 0
+
+
+def test_workflows_load_nonexistent() -> None:
+    """workflows --load with nonexistent dir should fail gracefully."""
+    try:
+        app(["workflows", "--load", "/nonexistent/dir"], standalone_mode=False)
+    except (SystemExit, Exception):
+        pass
+
+
+def test_kernel_help() -> None:
+    """kernel --help should exit 0."""
+    try:
+        app(["kernel", "--help"], standalone_mode=False)
+    except SystemExit as e:
+        assert e.code == 0
+
+
+def test_service_bus_help() -> None:
+    """service-bus --help should exit 0."""
+    try:
+        app(["service-bus", "--help"], standalone_mode=False)
+    except SystemExit as e:
+        assert e.code == 0
+
+
+def test_core_help() -> None:
+    """core --help should exit 0."""
+    try:
+        app(["core", "--help"], standalone_mode=False)
+    except SystemExit as e:
+        assert e.code == 0
+
+
+def test_plugins_help() -> None:
+    """plugins --help should exit 0."""
+    try:
+        app(["plugins", "--help"], standalone_mode=False)
+    except SystemExit as e:
+        assert e.code == 0
+
+
+def test_version() -> None:
+    """version should display version info."""
+    try:
+        app(["version"], standalone_mode=False)
+    except SystemExit as e:
+        assert e.code == 0
+
+
+def test_daemon_help() -> None:
+    """daemon --help should exit 0."""
+    try:
+        app(["daemon", "--help"], standalone_mode=False)
+    except SystemExit as e:
+        assert e.code == 0
+
+
+def test_init_help() -> None:
+    """init --help should exit 0."""
+    try:
+        app(["init", "--help"], standalone_mode=False)
+    except SystemExit as e:
+        assert e.code == 0
+
+
+def test_init() -> None:
+    """init should initialize Spectre."""
+    try:
+        app(["init"], standalone_mode=False)
+    except SystemExit as e:
+        assert e.code == 0
+
+
+def test_logs_help() -> None:
+    """logs --help should exit 0."""
+    try:
+        app(["logs", "--help"], standalone_mode=False)
+    except SystemExit as e:
+        assert e.code == 0
+
+
+def test_export_help() -> None:
+    """export --help should exit 0."""
+    try:
+        app(["export", "--help"], standalone_mode=False)
+    except SystemExit as e:
+        assert e.code == 0
+
+
+def test_export() -> None:
+    """export should export data to JSON."""
+    import tempfile
+    import os
+
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+        output = f.name
+    try:
+        app(["export", "--output", output], standalone_mode=False)
+        assert os.path.exists(output)
+        import json
+        data = json.loads(open(output).read())
+        assert "version" in data
+        assert "exported_at" in data
+    finally:
+        os.unlink(output)

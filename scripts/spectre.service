@@ -1,0 +1,22 @@
+[Unit]
+Description=Spectre System Maintenance Agent
+After=network.target podman.socket docker.socket
+Wants=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/.config/spectre/venv/bin/python -m apps.daemon.main
+Restart=on-failure
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.config/spectre
+PrivateTmp=yes
+
+[Install]
+WantedBy=default.target

@@ -1,92 +1,71 @@
+"""Tests for configuration loading and settings."""
+
 from __future__ import annotations
 
 from pathlib import Path
 
-from spectre.config import (
-    load_environments,
-    load_services,
-    resolve_environment,
-    resolve_service,
+from packages.config.settings import (
+    SpectreSettings,
+    OllamaConfig,
+    MonitoringConfig,
+    AgentConfig,
+    WorkflowSchedule,
+    load_settings,
+    save_settings,
 )
 
 
-def test_load_services_toml(tmp_path: Path) -> None:
-    cfg = tmp_path / "services.toml"
-    cfg.write_text("""
-[api]
-build_type = "docker"
-deploy_type = "docker-compose"
-port = 8000
-""")
-    services = load_services(str(cfg))
-    assert "api" in services
-    assert services["api"].build_type == "docker"
-    assert services["api"].port == 8000
+def test_default_settings() -> None:
+    s = SpectreSettings()
+    assert s.profile == "laptop"
+    assert s.log_level == "INFO"
+    assert s.plugins_dir is None
+    assert s.data_dir is None
 
 
-def test_load_services_json(tmp_path: Path) -> None:
-    cfg = tmp_path / "services.json"
-    cfg.write_text('{"api": {"build_type": "docker", "port": 8000}}')
-    services = load_services(str(cfg))
-    assert "api" in services
-    assert services["api"].port == 8000
+def test_ollama_config_defaults() -> None:
+    o = OllamaConfig()
+    assert o.url == "http://localhost:11434"
+    assert o.benchmark_model == "llama3.2:3b"
 
 
-def test_load_services_missing_file() -> None:
-    assert load_services("/nonexistent/path.toml") == {}
+def test_monitoring_config_defaults() -> None:
+    m = MonitoringConfig()
+    assert m.interval_seconds == 30
+    assert m.enabled is True
 
 
-def test_load_environments_toml(tmp_path: Path) -> None:
-    cfg = tmp_path / "envs.toml"
-    cfg.write_text("""
-[staging]
-compose_file = "docker-compose.yml"
-
-[production]
-kube_namespace = "prod"
-""")
-    envs = load_environments(str(cfg))
-    assert "staging" in envs
-    assert "production" in envs
-    assert envs["production"].kube_namespace == "prod"
+def test_agent_config_defaults() -> None:
+    a = AgentConfig()
+    assert a.enabled is True
+    assert a.interval_seconds == 300
 
 
-def test_resolve_service_from_config(tmp_path: Path) -> None:
-    cfg = tmp_path / "services.toml"
-    cfg.write_text('[api]\nbuild_type = "pip"\n')
-    svc = resolve_service("api", str(cfg))
-    assert svc.name == "api"
-    assert svc.build_type == "pip"
-    assert svc.deploy_type == "docker-compose"  # default
+def test_settings_with_agents() -> None:
+    s = SpectreSettings(
+        agents={"linux": AgentConfig(enabled=True), "security": AgentConfig(enabled=False)}
+    )
+    assert s.agents["linux"].enabled is True
+    assert s.agents["security"].enabled is False
 
 
-def test_resolve_service_fallback_defaults(tmp_path: Path) -> None:
-    cfg = tmp_path / "services.toml"
-    cfg.write_text("")
-    svc = resolve_service("unknown", str(cfg))
-    assert svc.name == "unknown"
-    assert svc.build_type == "docker"
+def test_settings_roundtrip(tmp_path: Path) -> None:
+    settings = SpectreSettings(profile="server", log_level="DEBUG")
+    path = tmp_path / "settings.yaml"
+    save_settings(settings, path)
+    loaded = load_settings(path)
+    assert loaded.profile == "server"
+    assert loaded.log_level == "DEBUG"
 
 
-def test_resolve_service_with_overrides(tmp_path: Path) -> None:
-    cfg = tmp_path / "services.toml"
-    cfg.write_text('[api]\nbuild_type = "docker"\nport = 8000\n')
-    svc = resolve_service("api", str(cfg), {"build_type": "pip"})
-    assert svc.build_type == "pip"  # override wins
-    assert svc.port == 8000  # from config
+def test_load_settings_missing_file() -> None:
+    s = load_settings(Path("/nonexistent/settings.yaml"))
+    assert s.profile == "laptop"
 
 
-def test_resolve_environment_with_overrides(tmp_path: Path) -> None:
-    cfg = tmp_path / "envs.toml"
-    cfg.write_text('[staging]\ncompose_file = "dc.yml"\n')
-    env = resolve_environment("staging", str(cfg), {"kube_namespace": "test"})
-    assert env.compose_file == "dc.yml"  # from config
-    assert env.kube_namespace == "test"  # override
-
-
-def test_resolve_environment_fallback(tmp_path: Path) -> None:
-    cfg = tmp_path / "envs.toml"
-    cfg.write_text("")
-    env = resolve_environment("missing", str(cfg))
-    assert env.name == "missing"
-    assert env.compose_file == "docker-compose.yml"
+def test_settings_with_schedules() -> None:
+    s = SpectreSettings(
+        schedules=[WorkflowSchedule(name="morning", schedule="every 24h")]
+    )
+    assert len(s.schedules) == 1
+    assert s.schedules[0].name == "morning"

@@ -1,0 +1,48 @@
+# Spectre Configuration
+# Place this file at ~/.config/spectre/settings.yaml
+
+# System profile: "laptop", "server", "development", "production"
+profile: laptop
+
+# Ollama AI configuration
+ollama:
+  url: "http://localhost:11434"
+  benchmark_model: "llama3.2:3b"
+
+# Monitoring settings
+monitoring:
+  interval_seconds: 30
+  enabled: true
+
+# Scheduled workflows
+schedules:
+  - name: "morning"
+    schedule: "every 24h"
+    enabled: true
+  - name: "weekly"
+    schedule: "every 168h"
+    enabled: true
+  - name: "security"
+    schedule: "every 168h"
+    enabled: true
+
+# Agent-specific configuration
+agents:
+  monitoring:
+    enabled: true
+    interval_seconds: 300
+  security:
+    enabled: true
+    interval_seconds: 3600
+  developer:
+    enabled: true
+    interval_seconds: 600
+
+# Plugin directory (optional)
+# plugins_dir: "/path/to/plugins"
+
+# Logging
+log_level: "INFO"
+
+# Data directory (optional)
+# data_dir: "/path/to/data"

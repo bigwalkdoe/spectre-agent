@@ -1,0 +1,23 @@
+version: "3.8"
+
+services:
+  spectre:
+    build: .
+    container_name: spectre
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - spectre-config:/root/.config/spectre
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - SPECTRE_PROFILE=production
+      - SPECTRE_LOG_LEVEL=INFO
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  spectre-config:

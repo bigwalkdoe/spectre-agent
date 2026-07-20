@@ -1,69 +1,139 @@
 # Spectre
 
-Deployment orchestrator for containerized services. Pre-checks, builds, deploys, health-checks, and tracks deployments across environments.
+Autonomous AI Engineering Operating System for Fedora Linux. Monitors, maintains, secures, and manages your workstation through agents, workflows, plugins, and a CLI/API/daemon.
 
 ## Quickstart
 
 ```bash
 pip install -e ".[dev]"
 
-# Deploy a service (uses config/services.toml and config/environments.toml)
-spectre deploy api staging v1.2.3
+# Run system diagnostics
+spectre doctor
 
-# Override config values with CLI flags
-spectre deploy api staging v1.2.3 --build-type pip --health-url http://localhost:9000/health
-
-# Record the deploy in the changelog
-spectre deploy api staging $(git rev-parse --short HEAD) --record
-
-# View status
+# Show system status
 spectre status
 
-# List deployments
-spectre list
+# Run a workflow
+spectre workflows morning-startup
 
-# Rollback
-spectre rollback api staging
+# View Kernel status
+spectre kernel status
+
+# Inspect ServiceBus
+spectre service-bus --list
+
+# Show core components
+spectre core
 ```
 
-## Pipeline
+## Architecture
 
 ```
-spectre deploy <service> <env> <version>
-  │
-  ├── 1. pre_check     git clean? docker available?
-  ├── 2. build         docker build / pip install
-  ├── 3. deploy        docker compose up / kubectl set image
-  ├── 4. health_check  HTTP GET health endpoint with retry
-  └── 5. record        append to .spectre/deployments.json
+┌─────────────────────────────────────────────────────────────┐
+│                        CLI / API                            │
+│           (doctor, kernel, service-bus, core)               │
+├─────────────────────────────────────────────────────────────┤
+│                     WorkflowEngine                          │
+│    (ServiceBus resolution + EventBus event publishing)      │
+├─────────────────────────────────────────────────────────────┤
+│                      ServiceBus                             │
+│     (request/response, pub/sub, persistent registry)        │
+├─────────────────────────────────────────────────────────────┤
+│                       EventBus                              │
+│          (workflow.* events, plugin hooks)                  │
+├─────────────────────────────────────────────────────────────┤
+│                       Kernel                                │
+│    (DI container, lifecycle, scheduler, plugin loader)      │
+├─────────────────────────────────────────────────────────────┤
+│  linux  │  devops  │  security  │  ai  │  developer  │ ... │
+│         plugins register as services on load               │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-Each stage runs sequentially. A failure stops the deployment immediately.
+## CLI Commands
+
+| Command | Description |
+|---------|-------------|
+| `spectre doctor` | Run system diagnostics and verify Kernel + ServiceBus health |
+| `spectre health` | Display system health metrics |
+| `spectre status` | Show overall system status |
+| `spectre monitor` | Display live system metrics |
+| `spectre update` | Check for system updates |
+| `spectre clean` | Clean system caches and unused packages |
+| `spectre repair` | Attempt system repair and health restoration |
+| `spectre optimize` | Run system optimization workflows |
+| `spectre security` | Security status and auditing |
+| `spectre services` | Manage systemd services |
+| `spectre containers` | List and manage containers |
+| `spectre models` | Manage AI models (Ollama) |
+| `spectre workflows` | Execute or list maintenance workflows |
+| `spectre backup` | Backup configuration and data |
+| `spectre restore` | Restore configuration and data |
+| `spectre report` | Generate system reports |
+| `spectre kernel` | Manage the Spectre Kernel lifecycle |
+| `spectre service-bus` | Inspect the Service Bus |
+| `spectre core` | Show Spectre Core status |
+
+## Workflows
+
+| Workflow | Description |
+|----------|-------------|
+| `morning-startup` | Daily startup: health check, updates, AI status |
+| `weekly-maintenance` | Complete weekly system maintenance |
+| `security-audit` | Full security audit scan |
+| `container-cleanup` | Prune container environments |
+| `model-cleanup` | Verify Ollama status and benchmark |
+| `shutdown` | Pre-shutdown checks |
+| `monthly-optimization` | Comprehensive monthly optimization |
+| `dependency-updates` | Check for outdated dependencies |
+| `backup` | Backup verification |
+| `restore` | Post-restore verification |
 
 ## Configuration
 
-Service definitions go in `config/services.toml`, environments in `config/environments.toml`:
+Settings are loaded with 4-level priority: Runtime > Project > User > Global
 
-```toml
-# config/services.toml
-[api]
-build_type = "docker"
-deploy_type = "docker-compose"
-port = 8000
+```yaml
+# ~/.config/spectre/settings.yaml
+profile: laptop
+log_level: INFO
+ollama_url: http://localhost:11434
+monitoring_interval: 30
 ```
 
-```toml
-# config/environments.toml
-[staging]
-compose_file = "docker-compose.yml"
+## API Endpoints
 
-[production]
-compose_file = "docker-compose.prod.yml"
-kube_namespace = "production"
-```
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/health` | GET | Health check |
+| `/api/agents` | GET | List agents |
+| `/api/agents/{name}` | GET | Agent status |
+| `/api/workflows` | GET | List workflows |
+| `/api/workflows/{name}` | POST | Run workflow |
+| `/api/workflows/history` | GET | Workflow history |
+| `/api/system/status` | GET | System status |
+| `/api/core/kernel` | GET | Kernel status |
+| `/api/core/kernel/start` | POST | Start Kernel |
+| `/api/core/kernel/stop` | POST | Stop Kernel |
+| `/api/core/service-bus` | GET | ServiceBus status |
+| `/api/reports` | GET | List reports |
+| `/api/config/{key}` | GET | Get config |
+| `/api/config/{key}` | PUT | Set config |
+| `/api/decisions` | GET | List decisions |
 
-Custom config paths can be specified with `--services` and `--environments`.
+## Database
 
-## State
+SQLite at `~/.config/spectre/memory.db` with 12 tables:
 
-Deployment history is persisted in `.spectre/deployments.json`.
+- `SystemMetric` — CPU, RAM, disk, battery, temperature history
+- `MaintenanceRecord` — Agent action results
+- `SecurityIncident` — Security findings
+- `Configuration` — Key-value config storage
+- `Report` — Generated reports
+- `WorkflowRun` — Workflow execution history
+- `Decision` — Decision audit log
+- `KVStore` — General key-value store
+- `Machine` — Machine identity and metadata
+- `AgentRecord` — Agent execution audit trail
+- `PluginRecord` — Plugin lifecycle tracking
+- `EventLog` — System event log

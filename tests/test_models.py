@@ -1,82 +1,88 @@
+"""Tests for memory database models and operations."""
+
 from __future__ import annotations
 
-from spectre.models import (
-    Deployment,
-    DeploymentStatus,
-    Environment,
-    Service,
-    Stage,
-    StepResult,
+from datetime import datetime, UTC
+from pathlib import Path
+
+from packages.memory.db import (
+    SystemMetric,
+    MaintenanceRecord,
+    SecurityIncident,
+    Configuration,
+    Report,
+    WorkflowRun,
+    Decision,
+    KVStore,
 )
 
 
-def test_deployment_default_status() -> None:
-    d = Deployment(service="api", environment="staging", version="v1")
-    assert d.status == DeploymentStatus.pending
-    assert d.steps == []
+def test_system_metric_creation() -> None:
+    m = SystemMetric(cpu_percent=50.0, memory_percent=60.0, swap_percent=10.0, disk_percent=70.0)
+    assert m.cpu_percent == 50.0
+    assert m.memory_percent == 60.0
+    assert m.id is None
 
 
-def test_deployment_to_dict_roundtrip() -> None:
-    d = Deployment(
-        service="api",
-        environment="staging",
-        version="v1",
-        status=DeploymentStatus.healthy,
-        steps=[
-            StepResult(
-                stage=Stage.build,
-                status=DeploymentStatus.healthy,
-                message="built image",
-                duration_ms=1200,
-            ),
-        ],
-        started_at="2024-01-01T00:00:00Z",
-        completed_at="2024-01-01T00:01:00Z",
+def test_system_metric_with_optional() -> None:
+    m = SystemMetric(
+        cpu_percent=50.0, memory_percent=60.0, swap_percent=10.0,
+        disk_percent=70.0, battery_percent=85.0, temperature_c=45.0,
     )
-    restored = Deployment.from_dict(d.to_dict())
-    assert restored.service == "api"
-    assert restored.status == DeploymentStatus.healthy
-    assert len(restored.steps) == 1
-    assert restored.steps[0].stage == Stage.build
-    assert restored.steps[0].duration_ms == 1200
+    assert m.battery_percent == 85.0
+    assert m.temperature_c == 45.0
 
 
-def test_step_result_defaults() -> None:
-    r = StepResult(stage=Stage.pre_check, status=DeploymentStatus.healthy, message="ok")
-    assert r.detail == ""
-    assert r.duration_ms == 0
+def test_maintenance_record_creation() -> None:
+    r = MaintenanceRecord(
+        agent="linux", action="dnf-check-update", status="success",
+        log_output="No updates available", duration_ms=1200,
+    )
+    assert r.agent == "linux"
+    assert r.status == "success"
+    assert r.duration_ms == 1200
 
 
-def test_service_from_dict() -> None:
-    data = {"name": "api", "build_type": "docker", "port": 9000, "unknown": "ignored"}
-    svc = Service.from_dict(data)
-    assert svc.name == "api"
-    assert svc.build_type == "docker"
-    assert svc.port == 9000
-    assert not hasattr(svc, "unknown")
+def test_security_incident_creation() -> None:
+    i = SecurityIncident(
+        severity="high", rule_id="FIREWALL_OFF", message="Firewall is not running",
+    )
+    assert i.severity == "high"
+    assert i.resolved is False
 
 
-def test_environment_from_dict() -> None:
-    data = {"name": "prod", "hosts": ["app1"], "extra": "x"}
-    env = Environment.from_dict(data)
-    assert env.name == "prod"
-    assert env.hosts == ["app1"]
+def test_configuration_creation() -> None:
+    c = Configuration(key="theme", value="dark", profile="laptop")
+    assert c.key == "theme"
+    assert c.value == "dark"
+    assert c.profile == "laptop"
 
 
-def test_deployment_status_enum() -> None:
-    assert DeploymentStatus.pending.value == "pending"
-    assert DeploymentStatus.healthy.value == "healthy"
-    assert DeploymentStatus.failed.value == "failed"
-    assert DeploymentStatus.rolled_back.value == "rolled_back"
+def test_report_creation() -> None:
+    r = Report(report_type="daily", content="# Daily Report", format="markdown")
+    assert r.report_type == "daily"
+    assert r.format == "markdown"
 
 
-def test_stage_enum() -> None:
-    stages = [s.value for s in Stage]
-    assert stages == [
-        "pre_check",
-        "build",
-        "deploy",
-        "health_check",
-        "record",
-        "rollback",
-    ]
+def test_workflow_run_creation() -> None:
+    w = WorkflowRun(
+        workflow="morning-startup", status="success",
+        duration_ms=5000, details='{"linux": {}}',
+    )
+    assert w.workflow == "morning-startup"
+    assert w.status == "success"
+
+
+def test_decision_creation() -> None:
+    d = Decision(
+        context="system maintenance", decision="run weekly cleanup",
+        rationale="Disk usage above 80%", outcome="completed",
+    )
+    assert d.decision == "run weekly cleanup"
+    assert d.outcome == "completed"
+
+
+def test_kv_store_creation() -> None:
+    kv = KVStore(key="last_boot", value="2024-01-01")
+    assert kv.key == "last_boot"
+    assert kv.value == "2024-01-01"
