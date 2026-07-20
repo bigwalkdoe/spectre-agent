@@ -5,7 +5,8 @@ Wants=network.target
 
 [Service]
 Type=simple
-ExecStart=%h/.config/spectre/venv/bin/python -m apps.daemon.main
+ExecStart=/usr/bin/python3 -m apps.daemon.main
+WorkingDirectory=%h/.config/spectre
 Restart=on-failure
 RestartSec=30
 StandardOutput=journal

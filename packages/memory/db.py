@@ -1,8 +1,8 @@
+from collections.abc import Generator
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Generator
 
-from sqlmodel import Field, Session, SQLModel, create_engine, select
+from sqlmodel import Field, Session, SQLModel, create_engine, desc, select
 
 # Define the database path in the user's home or local workspace directory
 DB_DIR = Path.home() / ".config" / "spectre"
@@ -196,7 +196,7 @@ def get_reports(report_type: str | None = None, limit: int = 50) -> list[Report]
         stmt = select(Report)
         if report_type:
             stmt = stmt.where(Report.report_type == report_type)
-        stmt = stmt.order_by(Report.timestamp.desc()).limit(limit)
+        stmt = stmt.order_by(desc(Report.timestamp)).limit(limit)
         return list(session.exec(stmt))
 
 
@@ -211,7 +211,7 @@ def get_workflow_runs(workflow: str | None = None, limit: int = 50) -> list[Work
         stmt = select(WorkflowRun)
         if workflow:
             stmt = stmt.where(WorkflowRun.workflow == workflow)
-        stmt = stmt.order_by(WorkflowRun.timestamp.desc()).limit(limit)
+        stmt = stmt.order_by(desc(WorkflowRun.timestamp)).limit(limit)
         return list(session.exec(stmt))
 
 
@@ -223,7 +223,7 @@ def save_decision(decision: Decision) -> None:
 
 def get_decisions(limit: int = 50) -> list[Decision]:
     with Session(engine) as session:
-        stmt = select(Decision).order_by(Decision.timestamp.desc()).limit(limit)
+        stmt = select(Decision).order_by(desc(Decision.timestamp)).limit(limit)
         return list(session.exec(stmt))
 
 
@@ -238,7 +238,7 @@ def save_machine(machine: Machine) -> None:
 
 def get_machines() -> list[Machine]:
     with Session(engine) as session:
-        stmt = select(Machine).order_by(Machine.last_seen.desc())
+        stmt = select(Machine).order_by(desc(Machine.last_seen))
         return list(session.exec(stmt))
 
 
@@ -253,7 +253,7 @@ def get_agent_records(agent_name: str | None = None, limit: int = 50) -> list[Ag
         stmt = select(AgentRecord)
         if agent_name:
             stmt = stmt.where(AgentRecord.agent_name == agent_name)
-        stmt = stmt.order_by(AgentRecord.timestamp.desc()).limit(limit)
+        stmt = stmt.order_by(desc(AgentRecord.timestamp)).limit(limit)
         return list(session.exec(stmt))
 
 
@@ -265,7 +265,7 @@ def save_plugin_record(record: PluginRecord) -> None:
 
 def get_plugin_records(limit: int = 50) -> list[PluginRecord]:
     with Session(engine) as session:
-        stmt = select(PluginRecord).order_by(PluginRecord.timestamp.desc()).limit(limit)
+        stmt = select(PluginRecord).order_by(desc(PluginRecord.timestamp)).limit(limit)
         return list(session.exec(stmt))
 
 
@@ -280,5 +280,5 @@ def get_events(event_type: str | None = None, limit: int = 100) -> list[EventLog
         stmt = select(EventLog)
         if event_type:
             stmt = stmt.where(EventLog.event_type == event_type)
-        stmt = stmt.order_by(EventLog.timestamp.desc()).limit(limit)
+        stmt = stmt.order_by(desc(EventLog.timestamp)).limit(limit)
         return list(session.exec(stmt))

@@ -6,9 +6,10 @@ import importlib.util
 import inspect
 import json
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from packages.memory.db import PluginRecord, save_plugin_record
 
@@ -148,7 +149,11 @@ class PluginLoader:
                             self._register_with_service_bus(instance)
                             # Persist to database
                             self._persist_plugin(instance)
-                            logger.info("Loaded plugin: %s v%s", manifest.name if manifest else name, manifest.version if manifest else "0.1.0")
+                            logger.info(
+                                "Loaded plugin: %s v%s",
+                                manifest.name if manifest else name,
+                                manifest.version if manifest else "0.1.0",
+                            )
             except Exception:
                 logger.exception("Failed to load plugin %s", filepath.name)
 

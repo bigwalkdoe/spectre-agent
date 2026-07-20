@@ -22,7 +22,9 @@ class AIAgent(BaseAgent):
         except Exception:
             self.ollama_available = False
         if self.context and hasattr(self.context, 'service_bus') and self.context.service_bus:
-            self.context.service_bus.register_service("ai", "agent", self, actions=["ollama-ping", "list-models", "benchmark-model"])
+            self.context.service_bus.register_service(
+                "ai", "agent", self, actions=["ollama-ping", "list-models", "benchmark-model"]
+            )
 
     def plan(self) -> list[str]:
         """Formulate AI tasks (Ollama health check, model listings, benchmark)."""
@@ -76,7 +78,6 @@ class AIAgent(BaseAgent):
     def observe(self) -> dict[str, Any]:
         """Observe Ollama stats: active models, latency baseline."""
         models = []
-        latency = -1.0
         available = False
 
         try:
@@ -95,7 +96,7 @@ class AIAgent(BaseAgent):
 
     def report(self, results: dict[str, Any]) -> str:
         """Format operations report."""
-        lines = [f"=== AI Operations Report ==="]
+        lines = ["=== AI Operations Report ==="]
         for action, data in results.items():
             icon = "✓" if data["status"] == "success" else "✗"
             lines.append(f"{icon} {action}: {data['status'].upper()} ({data['duration_ms']}ms)")

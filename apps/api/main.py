@@ -110,7 +110,7 @@ async def run_workflow(name: str, _: bool = Depends(verify_api_key)) -> dict[str
         result = eng.run_workflow(name)
         return result
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
 
 
 @app.get("/api/workflows/history")
@@ -154,7 +154,7 @@ async def load_workflows(directory: str, _: bool = Depends(verify_api_key)) -> d
         count = eng.load_workflows(Path(directory))
         return {"loaded": count, "directory": directory}
     except Exception as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
 
 
 # ── System ────────────────────────────────────────────────────────────────────
@@ -330,7 +330,11 @@ async def system_status() -> dict[str, Any]:
 
 
 @app.get("/api/reports")
-async def list_reports(report_type: str | None = None, limit: int = 50, _: bool = Depends(verify_api_key)) -> list[dict[str, Any]]:
+async def list_reports(
+    report_type: str | None = None,
+    limit: int = 50,
+    _: bool = Depends(verify_api_key),
+) -> list[dict[str, Any]]:
     """List generated reports."""
     reports = get_reports(report_type=report_type, limit=limit)
     return [
@@ -377,7 +381,12 @@ async def get_config(key: str, profile: str = "default", _: bool = Depends(verif
 
 
 @app.put("/api/config/{key}")
-async def set_config(key: str, value: str, profile: str = "default", _: bool = Depends(verify_api_key)) -> dict[str, str]:
+async def set_config(
+    key: str,
+    value: str,
+    profile: str = "default",
+    _: bool = Depends(verify_api_key),
+) -> dict[str, str]:
     """Set a configuration value."""
     save_configuration(Configuration(key=key, value=value, profile=profile))
     return {"key": key, "value": value, "profile": profile}
@@ -481,7 +490,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                     list.appendChild(li);
                 }
             } catch(e) {
-                document.getElementById('status-list').innerHTML = '<li>Error loading status</li>';
+                document.getElementById('status-list').innerHTML = '<li>Error loading status</li>';  # noqa: E501
             }
         }
 
@@ -489,11 +498,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             try {
                 const res = await fetch('/api/agents');
                 const data = await res.json();
-                document.getElementById('agents').innerHTML = data.agents.map(a =>
-                    '<span style="display:inline-block;background:#30363d;padding:4px 10px;border-radius:12px;margin:2px;font-size:13px;">' + a + '</span>'
-                ).join('');
+                const spanStyle = 'display:inline-block;background:#30363d;'
+                    + 'padding:4px 10px;border-radius:12px;margin:2px;font-size:13px;';
+                const agentsHtml = data.agents.map(a => `<span style="${spanStyle}">${a}</span>`).join('');
+                document.getElementById('agents').innerHTML = agentsHtml;
             } catch(e) {
-                document.getElementById('agents').innerHTML = 'Error loading agents';
+                document.getElementById('agents').innerHTML = 'Error loading agents';  # noqa: E501
             }
         }
 
@@ -501,9 +511,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             try {
                 const res = await fetch('/api/workflows');
                 const data = await res.json();
-                document.getElementById('workflows').innerHTML = data.workflows.map(w =>
-                    '<span style="display:inline-block;background:#30363d;padding:4px 10px;border-radius:12px;margin:2px;font-size:13px;">' + w + '</span>'
-                ).join('');
+                const spanStyle = 'display:inline-block;background:#30363d;'
+                    + 'padding:4px 10px;border-radius:12px;margin:2px;font-size:13px;';
+                const workflowsHtml = data.workflows.map(w => `<span style="${spanStyle}">${w}</span>`).join('');
+                document.getElementById('workflows').innerHTML = workflowsHtml;
             } catch(e) {
                 document.getElementById('workflows').innerHTML = 'Error loading workflows';
             }

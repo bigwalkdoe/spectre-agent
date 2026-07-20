@@ -122,7 +122,7 @@ class DevOpsAgent(BaseAgent):
 
     def report(self, results: dict[str, Any]) -> str:
         """Produce a formatted DevOps run summary."""
-        lines = [f"=== DevOps Orchestration Report ==="]
+        lines = ["=== DevOps Orchestration Report ==="]
         for action, data in results.items():
             icon = "✓" if data["status"] == "success" else "✗"
             lines.append(f"{icon} {action}: {data['status'].upper()} ({data['duration_ms']}ms)")

@@ -22,7 +22,9 @@ class PublishingAgent(BaseAgent):
         self.registry = self.config.get("registry", "pypi")
         self.package_name = self.config.get("package_name", "spectre")
         if self.context and hasattr(self.context, 'service_bus') and self.context.service_bus:
-            self.context.service_bus.register_service("publishing", "agent", self, actions=["check-version", "validate-dist", "check-git-status"])
+            self.context.service_bus.register_service(
+                "publishing", "agent", self, actions=["check-version", "validate-dist", "check-git-status"]
+            )
 
     def plan(self) -> list[str]:
         """Formulate a publishing checklist."""
@@ -118,7 +120,7 @@ class PublishingAgent(BaseAgent):
                 capture_output=True, text=True, timeout=5,
             )
             if res.returncode == 0 and res.stdout.strip():
-                files = [l.strip() for l in res.stdout.splitlines() if l.strip()]
+                files = [line.strip() for line in res.stdout.splitlines() if line.strip()]
                 return f"Found {len(files)} files in dist/: {', '.join(files[:5])}"
             return "No files found in dist/. Run 'python -m build' first."
         except Exception as e:

@@ -20,7 +20,9 @@ class DocumentationAgent(BaseAgent):
         }
         self.project_root = Path(self.config.get("project_root", "."))
         if self.context and hasattr(self.context, 'service_bus') and self.context.service_bus:
-            self.context.service_bus.register_service("documentation", "agent", self, actions=["scan-docs", "check-links", "coverage-report"])
+            self.context.service_bus.register_service(
+                "documentation", "agent", self, actions=["scan-docs", "check-links", "coverage-report"]
+            )
 
     def plan(self) -> list[str]:
         """Formulate a documentation checklist."""
@@ -135,7 +137,7 @@ class DocumentationAgent(BaseAgent):
                 import re
 
                 refs = re.findall(r"\[([^\]]+)\]\(([^)]+)\)", content)
-                for label, target in refs:
+                for _label, target in refs:
                     if target.startswith("http"):
                         continue
                     ref_path = md_file.parent / target

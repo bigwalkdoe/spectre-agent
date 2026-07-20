@@ -28,10 +28,18 @@ class SpectreDaemon:
 
         # Initialize Kernel (replaces manual event_bus + scheduler)
         self.kernel = Kernel()
-        self.service_bus = self.kernel.container.resolve("service_bus") if self.kernel.container.has("service_bus") else ServiceBus()
+        self.service_bus = (
+            self.kernel.container.resolve("service_bus")
+            if self.kernel.container.has("service_bus")
+            else ServiceBus()
+        )
 
         # Initialize engine and monitoring with context
-        self.engine = WorkflowEngine(config=self.config, service_bus=self.service_bus, event_bus=self.kernel.event_bus)
+        self.engine = WorkflowEngine(
+            config=self.config,
+            service_bus=self.service_bus,
+            event_bus=self.kernel.event_bus,
+        )
         self.monitoring = MonitoringAgent(config=self.config)
         self.monitoring.initialize()
 

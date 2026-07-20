@@ -22,7 +22,9 @@ class MonitoringAgent(BaseAgent):
             "disk_percent": self.config.get("disk_threshold", 90),
         }
         if self.context and hasattr(self.context, 'service_bus') and self.context.service_bus:
-            self.context.service_bus.register_service("monitoring", "agent", self, actions=["collect-metrics", "check-thresholds"])
+            self.context.service_bus.register_service(
+                "monitoring", "agent", self, actions=["collect-metrics", "check-thresholds"]
+            )
 
     def plan(self) -> list[str]:
         """Formulate a monitoring checklist."""

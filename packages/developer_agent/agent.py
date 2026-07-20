@@ -153,7 +153,7 @@ class DeveloperAgent(BaseAgent):
                 ["git", "status", "--short"],
                 capture_output=True, text=True, timeout=10,
             )
-            lines = [l.strip() for l in res.stdout.splitlines() if l.strip()]
+            lines = [line.strip() for line in res.stdout.splitlines() if line.strip()]
             if lines:
                 return f"{len(lines)} uncommitted changes: {', '.join(lines[:5])}"
             return "Working tree clean. No uncommitted changes."

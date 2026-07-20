@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import signal
 import sys
+from collections.abc import Callable
 from typing import Any
 
 from packages.core.event_bus import EventBus
@@ -56,7 +57,7 @@ class Kernel:
         self.event_bus = EventBus()
         self.scheduler = TaskScheduler()
         self._running = False
-        self._shutdown_hooks: list[callable] = []
+        self._shutdown_hooks: list[Callable[[], Any]] = []
 
         # Register core services
         self.container.register("kernel", self)
@@ -78,7 +79,7 @@ class Kernel:
         """Register a service in the DI container."""
         self.container.register(name, instance)
 
-    def register_shutdown_hook(self, hook: callable) -> None:
+    def register_shutdown_hook(self, hook: Callable[[], Any]) -> None:
         """Register a function to run on shutdown."""
         self._shutdown_hooks.append(hook)
 

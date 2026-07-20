@@ -4,9 +4,10 @@ import logging
 import re
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Callable
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -75,14 +76,14 @@ def parse_cron(expr: str) -> list[set[int]]:
     if len(fields) != 5:
         return [set()] * 5
     bounds = [(0, 59), (0, 23), (1, 31), (1, 12), (0, 6)]
-    return [cron_field(f, lo, hi) for f, (lo, hi) in zip(fields, bounds)]
+    return [cron_field(f, lo, hi) for f, (lo, hi) in zip(fields, bounds, strict=False)]
 
 
 def cron_matches(cron_expr: str, dt: datetime) -> bool:
     """Check if a datetime matches a cron expression."""
     fields = parse_cron(cron_expr)
     checks = [dt.minute, dt.hour, dt.day, dt.month, dt.weekday()]
-    return all(v in s for v, s in zip(checks, fields))
+    return all(v in s for v, s in zip(checks, fields, strict=False))
 
 
 def is_due(schedule_expr: str, last_run: float | None = None) -> bool:

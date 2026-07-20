@@ -75,4 +75,4 @@ class BaseAgent(ABC):
 
         Override to persist agent state to the memory engine.
         """
-        pass
+        return  # noqa: B027  # intentional no-op base implementation

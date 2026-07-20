@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from pathlib import Path
+from typing import Any
 
 from packages.core.agent import AgentContext
 from packages.core.event_bus import EventBus
@@ -202,8 +204,6 @@ def load_workflow_from_yaml(path: str | Path) -> WorkflowDefinition | None:
         on_success: security.audit.passed
     ```
     """
-    from pathlib import Path
-
     import yaml
 
     filepath = Path(path)
@@ -222,8 +222,6 @@ def load_workflow_from_yaml(path: str | Path) -> WorkflowDefinition | None:
 
 def load_workflow_from_json(path: str | Path) -> WorkflowDefinition | None:
     """Load a workflow definition from a JSON file."""
-    from pathlib import Path
-
     filepath = Path(path)
     if not filepath.is_file():
         logger.warning("Workflow file not found: %s", filepath)
@@ -268,8 +266,6 @@ def _parse_workflow_definition(data: dict[str, Any]) -> WorkflowDefinition | Non
 
 def load_workflows_from_dir(directory: str | Path) -> dict[str, WorkflowDefinition]:
     """Load all workflow definitions from a directory (YAML and JSON files)."""
-    from pathlib import Path
-
     dir_path = Path(directory)
     if not dir_path.is_dir():
         return {}
@@ -330,7 +326,8 @@ class WorkflowEngine:
             agent.initialize()
             agents[name] = agent
             # Register with service bus
-            self.service_bus.register_service(name, "agent", agent, actions=getattr(agent, 'tools', {}).keys() if hasattr(agent, 'tools') else [])
+            actions = getattr(agent, 'tools', {}).keys() if hasattr(agent, 'tools') else []
+            self.service_bus.register_service(name, "agent", agent, actions=actions)
 
         return agents
 
@@ -386,11 +383,14 @@ class WorkflowEngine:
         # Publish workflow started event (sync wrapper)
         self._publish_event("workflow.started", {"workflow": name})
 
-        for i, step in enumerate(definition.steps):
+        for step in definition.steps:
             step_key = f"{step.agent}.{step.action}"
 
             # Publish step started event
-            self._publish_event("workflow.step.started", {"workflow": name, "step": step_key, "agent": step.agent, "action": step.action})
+            self._publish_event(
+                "workflow.step.started",
+                {"workflow": name, "step": step_key, "agent": step.agent, "action": step.action},
+            )
 
             # Check condition
             if step.condition and not step.condition():
@@ -403,7 +403,10 @@ class WorkflowEngine:
             if not agent:
                 step_results[step_key] = {"status": "failed", "error": f"Agent '{step.agent}' not found"}
                 failed_steps.append(step_key)
-                self._publish_event("workflow.step.failed", {"workflow": name, "step": step_key, "error": f"Agent '{step.agent}' not found"})
+                self._publish_event(
+                    "workflow.step.failed",
+                    {"workflow": name, "step": step_key, "error": f"Agent '{step.agent}' not found"},
+                )
                 if not definition.continue_on_failure:
                     status = "failed"
                     break
@@ -431,10 +434,16 @@ class WorkflowEngine:
 
             if success:
                 # Publish step completed event
-                self._publish_event("workflow.step.completed", {"workflow": name, "step": step_key, "result": step_results[step_key]})
+                self._publish_event(
+                    "workflow.step.completed",
+                    {"workflow": name, "step": step_key, "result": step_results[step_key]},
+                )
                 # Publish custom success event
                 if step.on_success:
-                    self._publish_event(step.on_success, {"workflow": name, "step": step_key, "result": step_results[step_key]})
+                    self._publish_event(
+                        step.on_success,
+                        {"workflow": name, "step": step_key, "result": step_results[step_key]},
+                    )
             else:
                 failed_steps.append(step_key)
                 status = "failed"

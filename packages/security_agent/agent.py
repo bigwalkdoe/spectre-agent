@@ -96,7 +96,7 @@ class SecurityAgent(BaseAgent):
 
     def report(self, results: dict[str, Any]) -> str:
         """Produce a formatted security status report."""
-        lines = [f"=== Security Audit Report ==="]
+        lines = ["=== Security Audit Report ==="]
         for action, data in results.items():
             icon = "✓" if data["status"] == "success" else "✗"
             lines.append(f"{icon} {action}: {data['status'].upper()} ({data['duration_ms']}ms)")
@@ -176,7 +176,10 @@ class SecurityAgent(BaseAgent):
             listening = sorted(list(set(listening)))
             
             # Check for generic listening on wildcard address for non-local services
-            wildcards = [p for p in listening if p.startswith("0.0.0.0:") or p.startswith("*:") or p.startswith("[::]:")]
+            wildcards = [
+                p for p in listening
+                if p.startswith("0.0.0.0:") or p.startswith("*:") or p.startswith("[::]:")
+            ]
             if wildcards:
                 save_security_incident(
                     SecurityIncident(
@@ -195,7 +198,9 @@ class SecurityAgent(BaseAgent):
         scan_dir = Path(".")
         secret_patterns = {
             "private_key": re.compile(r"-----BEGIN [A-Z]+ PRIVATE KEY-----"),
-            "generic_secret": re.compile(r"(api_key|secret_key|password|token)\s*=\s*['\"][A-Za-z0-9_-]{20,}['\"]", re.IGNORECASE)
+            "generic_secret": re.compile(
+                r"(api_key|secret_key|password|token)\s*=\s*['\"][A-Za-z0-9_-]{20,}['\"]", re.IGNORECASE
+            )
         }
         
         found_incidents = []

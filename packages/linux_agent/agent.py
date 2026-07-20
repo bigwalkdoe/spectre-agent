@@ -95,7 +95,7 @@ class LinuxAgent(BaseAgent):
             # Try to grab CPU core temperature or fallback
             temp_c = None
             if temps:
-                for name, entries in temps.items():
+                for _name, entries in temps.items():
                     if entries:
                         temp_c = entries[0].current
                         break

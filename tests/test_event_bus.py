@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 from packages.core.event_bus import EventBus
 
@@ -64,7 +65,10 @@ def test_no_subscribers() -> None:
 
 def test_get_subscribers() -> None:
     bus = EventBus()
-    fn = lambda d: None
+
+    def fn(d: Any) -> None:
+        return None
+
     bus.subscribe("evt", fn)
     subs = bus.get_subscribers("evt")
     assert fn in subs
