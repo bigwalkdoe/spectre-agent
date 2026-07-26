@@ -27,7 +27,7 @@ Spectre monitors, maintains, secures, and manages your Linux workstation through
 
 ```bash
 # Clone the repository
-git clone https://github.com/bigwalkdoe/spectre.git
+git clone https://github.com/bigwalkdoe/spectre-system-maintenance-agent.git
 cd spectre
 
 # Install in development mode
