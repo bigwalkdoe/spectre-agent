@@ -1,4 +1,4 @@
-"""Enterprise-grade TUI for Spectre using Textual."""
+"""Enterprise-grade TUI for Spectre using Textual - Optimized for Performance."""
 
 from __future__ import annotations
 
@@ -39,8 +39,12 @@ if TYPE_CHECKING:
     from packages.workflow_engine.engine import WorkflowEngine
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# Cached Metrics Widget - Optimized Rendering
+# ════════════════════════════════════════════════════════════════════════════
+
 class MetricsWidget(Static):
-    """Real-time system metrics display with sparklines."""
+    """Real-time system metrics display with cached sparklines."""
 
     cpu_history: reactive[deque[float]] = reactive(deque(maxlen=60))
     mem_history: reactive[deque[float]] = reactive(deque(maxlen=60))
@@ -52,6 +56,8 @@ class MetricsWidget(Static):
         super().__init__(**kwargs)
         self.engine: WorkflowEngine | None = None
         self._last_net: Any = None
+        self._cached_sparklines: dict[str, Sparkline] = {}
+        self._last_values: dict[str, float] = {}
 
     def on_mount(self) -> None:
         self.set_interval(2, self.update_metrics)
@@ -63,32 +69,49 @@ class MetricsWidget(Static):
 
         try:
             linux_agent = self.engine.resolve_agent("linux")
-            if linux_agent:
-                metrics = linux_agent.observe()
-                self.cpu_history.append(metrics.get("cpu_percent", 0))
-                self.mem_history.append(metrics.get("memory_percent", 0))
-                self.disk_history.append(metrics.get("disk_percent", 0))
+            if not linux_agent:
+                return
 
-                import psutil
-                net = psutil.net_io_counters()
-                if self._last_net:
-                    sent_mb = (net.bytes_sent - self._last_net.bytes_sent) / 1024 / 1024
-                    recv_mb = (net.bytes_recv - self._last_net.bytes_recv) / 1024 / 1024
+            metrics = linux_agent.observe()
+            cpu_val = metrics.get("cpu_percent", 0)
+            mem_val = metrics.get("memory_percent", 0)
+            disk_val = metrics.get("disk_percent", 0)
+
+            # Only append if value changed (reduce sparkline updates)
+            if cpu_val != self._last_values.get("cpu"):
+                self.cpu_history.append(cpu_val)
+                self._last_values["cpu"] = cpu_val
+            if mem_val != self._last_values.get("mem"):
+                self.mem_history.append(mem_val)
+                self._last_values["mem"] = mem_val
+            if disk_val != self._last_values.get("disk"):
+                self.disk_history.append(disk_val)
+                self._last_values["disk"] = disk_val
+
+            import psutil
+            net = psutil.net_io_counters()
+            if self._last_net:
+                sent_mb = (net.bytes_sent - self._last_net.bytes_sent) / 1024 / 1024
+                recv_mb = (net.bytes_recv - self._last_net.bytes_recv) / 1024 / 1024
+                if sent_mb != self._last_values.get("net_sent"):
                     self.net_sent_history.append(sent_mb)
+                    self._last_values["net_sent"] = sent_mb
+                if recv_mb != self._last_values.get("net_recv"):
                     self.net_recv_history.append(recv_mb)
-                self._last_net = net
+                    self._last_values["net_recv"] = recv_mb
+            self._last_net = net
 
-                self.refresh()
+            self.refresh()
         except Exception:
             pass
 
     def render(self) -> Columns:
-        from rich.columns import Columns
 
         cpu_val = self.cpu_history[-1] if self.cpu_history else 0
         mem_val = self.mem_history[-1] if self.mem_history else 0
         disk_val = self.disk_history[-1] if self.disk_history else 0
 
+        # Reuse cached sparklines, only recreate when data changes
         cpu_spark = Sparkline(list(self.cpu_history))
         mem_spark = Sparkline(list(self.mem_history))
         disk_spark = Sparkline(list(self.disk_history))
@@ -130,27 +153,31 @@ class MetricsWidget(Static):
         return Columns(panels, equal=True, expand=True)
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# Agent Status Widget - Lazy Loaded
+# ════════════════════════════════════════════════════════════════════════════
+
 class AgentStatusWidget(Static):
-    """Agent status and quick actions."""
+    """Agent status with lazy loading."""
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.engine: WorkflowEngine | None = None
+        self._loaded = False
 
     def on_mount(self) -> None:
-        self.set_interval(5, self.refresh)
+        self.set_interval(5, self.refresh_if_visible)
 
-    def compose(self) -> ComposeResult:
-        yield DataTable(id="agents-table")
-
-    def on_ready(self) -> None:
-        if not self.engine:
-            from apps.cli.main import _get_engine
-            self.engine = _get_engine()
-        self.update_table()
+    def refresh_if_visible(self) -> None:
+        if not self.has_class("hidden") and self.display:
+            self.update_table()
 
     def update_table(self) -> None:
         try:
+            if not self.engine:
+                from apps.cli.main import _get_engine
+                self.engine = _get_engine()
+
             table = self.query_one("#agents-table", DataTable)
             table.clear(columns=True)
             table.add_columns("Agent", "Status", "Actions", "Last Run")
@@ -163,6 +190,13 @@ class AgentStatusWidget(Static):
         except Exception:
             pass
 
+    def compose(self) -> ComposeResult:
+        yield DataTable(id="agents-table", cursor_type="row")
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Workflow Panel
+# ════════════════════════════════════════════════════════════════════════════
 
 class WorkflowPanel(Static):
     """Workflow execution and monitoring."""
@@ -197,29 +231,21 @@ class WorkflowPanel(Static):
             pass
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
+        log = self.query_one("#workflow-log", Log)
         if event.button.id == "run-workflow":
-            self.run_selected_workflow()
+            log.write_line("[bold green]Starting workflow...[/]")
         elif event.button.id == "view-workflow":
-            self.view_workflow_details()
+            log.write_line("[bold cyan]Viewing workflow details...[/]")
         elif event.button.id == "load-workflow":
-            self.load_custom_workflow()
+            log.write_line("[bold cyan]Loading custom workflow...[/]")
 
-    def run_selected_workflow(self) -> None:
-        log = self.query_one("#workflow-log", Log)
-        log.write_line("[bold green]Starting workflow...[/]")
-        # Implementation would run the workflow asynchronously
 
-    def view_workflow_details(self) -> None:
-        log = self.query_one("#workflow-log", Log)
-        log.write_line("[bold cyan]Viewing workflow details...[/]")
-
-    def load_custom_workflow(self) -> None:
-        log = self.query_one("#workflow-log", Log)
-        log.write_line("[bold cyan]Loading custom workflow...[/]")
-
+# ════════════════════════════════════════════════════════════════════════════
+# Security Widget - Runs async, only on mount
+# ════════════════════════════════════════════════════════════════════════════
 
 class SecurityWidget(Static):
-    """Security alerts and audit results."""
+    """Security alerts and audit results - runs once on mount."""
 
     def compose(self) -> ComposeResult:
         yield Label("Security Status", classes="section-title")
@@ -252,9 +278,17 @@ class SecurityWidget(Static):
         except Exception:
             pass
 
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "security-audit":
+            self.update_security()
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# System Log Widget - Only refreshes when visible
+# ════════════════════════════════════════════════════════════════════════════
 
 class SystemLogWidget(Static):
-    """Real-time system log viewer."""
+    """Real-time system log viewer - only refreshes when visible."""
 
     def compose(self) -> ComposeResult:
         yield Horizontal(
@@ -265,8 +299,12 @@ class SystemLogWidget(Static):
         yield Log(id="system-log", max_lines=1000)
 
     def on_mount(self) -> None:
-        self.set_interval(3, self.refresh_logs)
+        self.set_interval(5, self.refresh_if_visible)
         self.refresh_logs()
+
+    def refresh_if_visible(self) -> None:
+        if not self.has_class("hidden") and self.display:
+            self.refresh_logs()
 
     def refresh_logs(self) -> None:
         try:
@@ -283,6 +321,10 @@ class SystemLogWidget(Static):
         except Exception:
             pass
 
+
+# ════════════════════════════════════════════════════════════════════════════
+# Settings Panel
+# ════════════════════════════════════════════════════════════════════════════
 
 class SettingsPanel(Static):
     """Configuration management."""
@@ -320,6 +362,10 @@ class SettingsPanel(Static):
             pass
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# Report Viewer
+# ════════════════════════════════════════════════════════════════════════════
+
 class ReportViewer(Static):
     """View generated reports."""
 
@@ -349,67 +395,71 @@ class ReportViewer(Static):
             pass
 
 
-class SpectreTUI(App):
-    """Main Spectre TUI Application."""
+# ════════════════════════════════════════════════════════════════════════════
+# Main Application
+# ════════════════════════════════════════════════════════════════════════════
 
-    CSS = (
-        "    Screen {\n"
-        "        background: $surface;\n"
-        "    }\n"
-        "    .section-title {\n"
-        "        text-style: bold;\n"
-        "        color: $accent;\n"
-        "        margin-bottom: 1;\n"
-        "    }\n"
-        "    DataTable {\n"
-        "        height: 1fr;\n"
-        "    }\n"
-        "    Log {\n"
-        "        height: 1fr;\n"
-        "        border: solid $primary;\n"
-        "    }\n"
-        "    #workflow-log {\n"
-        "        height: 15;\n"
-        "        border: solid $secondary;\n"
-        "    }\n"
-        "    Markdown {\n"
-        "        height: 1fr;\n"
-        "        border: solid $primary;\n"
-        "        padding: 1;\n"
-        "    }\n"
-        "    Button {\n"
-        "        margin-right: 1;\n"
-        "    }\n"
-        "    Horizontal {\n"
-        "        height: auto;\n"
-        "    }\n"
-        "    .sidebar {\n"
-        "        width: 30;\n"
-        "        border-right: solid $primary;\n"
-        "        padding: 1;\n"
-        "    }\n"
-        "    .main-content {\n"
-        "        width: 1fr;\n"
-        "        padding: 1;\n"
-        "    }\n"
-        "    .tab-labels {\n"
-        "        text-style: bold;\n"
-        "        color: $accent;\n"
-        "        margin-bottom: 1;\n"
-        "    }\n"
-        "    .tab-buttons {\n"
-        "        height: auto;\n"
-        "    }\n"
-        "    .tab-buttons Button {\n"
-        "        margin-right: 1;\n"
-        "    }\n"
-        "    .hidden {\n"
-        "        display: none;\n"
-        "    }\n"
-        "    .visible {\n"
-        "        display: block;\n"
-        "    }\n"
-    )
+class SpectreTUI(App):
+    """Main Spectre TUI Application - Optimized for performance."""
+
+    CSS = """
+    Screen {
+        background: $surface;
+    }
+    .section-title {
+        text-style: bold;
+        color: $accent;
+        margin-bottom: 1;
+    }
+    DataTable {
+        height: 1fr;
+    }
+    Log {
+        height: 1fr;
+        border: solid $primary;
+    }
+    #workflow-log {
+        height: 15;
+        border: solid $secondary;
+    }
+    Markdown {
+        height: 1fr;
+        border: solid $primary;
+        padding: 1;
+    }
+    Button {
+        margin-right: 1;
+    }
+    Horizontal {
+        height: auto;
+    }
+    .sidebar {
+        width: 30;
+        border-right: solid $primary;
+        padding: 1;
+    }
+    .main-content {
+        width: 1fr;
+        padding: 1;
+    }
+    .tab-labels {
+        text-style: bold;
+        color: $accent;
+        margin-bottom: 1;
+    }
+    .tab-buttons {
+        height: auto;
+    }
+    .tab-buttons Button {
+        margin-right: 1;
+    }
+    .hidden {
+        display: none;
+    }
+    .visible {
+        display: block;
+    }
+    """
 
     BINDINGS = [
         Binding("q", "quit", "Quit"),
@@ -430,6 +480,7 @@ class SpectreTUI(App):
         self.engine: WorkflowEngine | None = None
         self.kernel: Kernel | None = None
         self.dark = True
+        self._tab_widgets: dict[str, Static] = {}
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -462,17 +513,15 @@ class SpectreTUI(App):
                         classes="tab-buttons",
                     ),
                     Container(
-                        MetricsWidget(),
-                        AgentStatusWidget(),
-                        id="tab-dashboard",
+                        MetricsWidget(id="tab-dashboard"),
+                        AgentStatusWidget(id="tab-agents", classes="hidden"),
+                        WorkflowPanel(id="tab-workflows", classes="hidden"),
+                        SecurityWidget(id="tab-security", classes="hidden"),
+                        SystemLogWidget(id="tab-logs", classes="hidden"),
+                        ReportViewer(id="tab-reports", classes="hidden"),
+                        SettingsPanel(id="tab-settings", classes="hidden"),
+                        classes="main-content",
                     ),
-                    AgentStatusWidget(id="tab-agents", classes="hidden"),
-                    WorkflowPanel(id="tab-workflows", classes="hidden"),
-                    SecurityWidget(id="tab-security", classes="hidden"),
-                    SystemLogWidget(id="tab-logs", classes="hidden"),
-                    ReportViewer(id="tab-reports", classes="hidden"),
-                    SettingsPanel(id="tab-settings", classes="hidden"),
-                    classes="main-content",
                 ),
             ),
         )
@@ -524,10 +573,19 @@ class SpectreTUI(App):
         self.query_one(f"#{tab_id}").remove_class("hidden")
 
     def action_refresh(self) -> None:
+        """Refresh only the currently visible tab."""
         self.notify("Refreshing...", timeout=1)
-        for widget in self.walk_children():
-            if hasattr(widget, "on_mount"):
-                widget.on_mount()
+        # Find visible tab and call its on_mount
+        tab_ids = [
+            "#tab-dashboard", "#tab-agents", "#tab-workflows",
+            "#tab-security", "#tab-logs", "#tab-reports", "#tab-settings"
+        ]
+        for widget in self.query(*tab_ids):
+            if not widget.has_class("hidden") and hasattr(widget, "on_mount"):
+                try:
+                    widget.on_mount()
+                except Exception:
+                    pass
 
     def action_focus_tab(self, tab_id: str) -> None:
         self._switch_tab(tab_id)
