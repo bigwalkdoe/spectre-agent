@@ -8,11 +8,11 @@ from pathlib import Path
 import pytest
 
 from packages.workflow_engine.engine import (
-    WorkflowEngine,
-    load_workflow_from_yaml,
-    load_workflow_from_json,
-    load_workflows_from_dir,
     WORKFLOW_DEFINITIONS,
+    WorkflowEngine,
+    load_workflow_from_json,
+    load_workflow_from_yaml,
+    load_workflows_from_dir,
 )
 
 
@@ -259,7 +259,7 @@ steps:
 
 def test_engine_register_workflow() -> None:
     """Test WorkflowEngine.register_workflow method."""
-    from packages.workflow_engine.engine import WorkflowDefinition, Step
+    from packages.workflow_engine.engine import Step, WorkflowDefinition
 
     engine = WorkflowEngine()
     custom_wf = WorkflowDefinition(
