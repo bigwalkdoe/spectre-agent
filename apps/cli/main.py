@@ -1465,76 +1465,11 @@ def import_data(
 def dashboard(
     refresh: int = typer.Option(5, "--refresh", "-r", help="Refresh interval in seconds"),
 ) -> None:
-    """Interactive TUI dashboard."""
-    from rich.layout import Layout
-    from rich.live import Live
-    from rich.panel import Panel
-    from rich.text import Text
+    """Interactive enterprise-grade TUI dashboard."""
+    from apps.tui.app import run_tui
 
     init_db()
-
-    def build_dashboard() -> Layout:
-        layout = Layout()
-        layout.split_column(
-            Layout(name="header", size=3),
-            Layout(name="body"),
-            Layout(name="footer", size=3),
-        )
-        layout["body"].split_row(
-            Layout(name="left"),
-            Layout(name="right"),
-        )
-
-        # Header
-        header = Text(" Spectre Dashboard ", style="bold white on blue")
-        layout["header"].update(Panel(header, style="blue"))
-
-        # Left: System metrics
-        try:
-            linux_agent = _get_engine().resolve_agent("linux")
-            metrics = linux_agent.observe() if linux_agent else {}
-        except Exception:
-            metrics = {}
-
-        metrics_text = Text()
-        metrics_text.append("System Metrics\n", style="bold cyan")
-        metrics_text.append(f"CPU:     {metrics.get('cpu_percent', '?')}%\n")
-        metrics_text.append(f"Memory:  {metrics.get('memory_percent', '?')}%\n")
-        metrics_text.append(f"Swap:    {metrics.get('swap_percent', '?')}%\n")
-        metrics_text.append(f"Disk:    {metrics.get('disk_percent', '?')}%\n")
-        if metrics.get('battery_percent'):
-            metrics_text.append(f"Battery: {metrics['battery_percent']}%\n")
-        if metrics.get('temperature_c'):
-            metrics_text.append(f"Temp:    {metrics['temperature_c']}°C\n")
-        layout["left"].update(Panel(metrics_text, title="System"))
-
-        # Right: Recent events
-        from packages.memory.db import get_events
-        events = get_events(limit=8)
-        events_text = Text()
-        events_text.append("Recent Events\n", style="bold cyan")
-        for event in events:
-            ts = event.timestamp.strftime("%H:%M")
-            events_text.append(f"{ts} ", style="dim")
-            events_text.append(f"{event.event_type} ", style="green")
-            events_text.append(f"({event.source})\n")
-        if not events:
-            events_text.append("No events recorded\n", style="dim")
-        layout["right"].update(Panel(events_text, title="Events"))
-
-        # Footer
-        footer = Text(f" Refreshing every {refresh}s | Press Ctrl+C to exit ", style="dim")
-        layout["footer"].update(Panel(footer, style="dim"))
-
-        return layout
-
-    try:
-        with Live(build_dashboard(), refresh_per_second=1/refresh, console=console) as live:
-            while True:
-                time.sleep(refresh)
-                live.update(build_dashboard())
-    except KeyboardInterrupt:
-        console.print("\n[dim]Dashboard stopped.[/dim]")
+    run_tui(refresh=refresh)
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
