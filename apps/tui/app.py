@@ -557,6 +557,12 @@ class SpectreTUI(App):
             "nav-logs": "tab-logs",
             "nav-reports": "tab-reports",
             "nav-settings": "tab-settings",
+            "btn-tab-dashboard": "tab-dashboard",
+            "btn-tab-agents": "tab-agents",
+            "btn-tab-workflows": "tab-workflows",
+            "btn-tab-security": "tab-security",
+            "btn-tab-logs": "tab-logs",
+            "btn-tab-reports": "tab-reports",
             "btn-tab-settings": "tab-settings",
         }
         if event.button.id in tab_map:
