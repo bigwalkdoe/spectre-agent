@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import asyncio
+import inspect
 import logging
 from collections import defaultdict
 from collections.abc import Callable
@@ -39,7 +39,7 @@ class EventBus:
         count = 0
         for callback in listeners:
             try:
-                if asyncio.iscoroutinefunction(callback):
+                if inspect.iscoroutinefunction(callback):
                     await callback(data)
                 else:
                     callback(data)

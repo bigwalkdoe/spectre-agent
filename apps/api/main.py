@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Security
@@ -24,7 +26,6 @@ from packages.memory.db import (
 )
 from packages.workflow_engine.engine import WorkflowEngine
 
-app = FastAPI(title="Spectre API", version="0.2.0")
 engine: WorkflowEngine | None = None
 kernel: Kernel | None = None
 service_bus: ServiceBus | None = None
@@ -48,8 +49,8 @@ def _get_engine() -> WorkflowEngine:
     if engine is None:
         settings = load_settings()
         bus = _get_service_bus()
-        kernel = _get_kernel()
-        engine = WorkflowEngine(config={"ollama_url": settings.ollama.url}, service_bus=bus, event_bus=kernel.event_bus)
+        k = _get_kernel()
+        engine = WorkflowEngine(config={"ollama_url": settings.ollama.url}, service_bus=bus, event_bus=k.event_bus)
     return engine
 
 
@@ -67,9 +68,14 @@ def _get_service_bus() -> ServiceBus:
     return service_bus
 
 
-@app.on_event("startup")
-async def startup() -> None:
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    """Application lifespan handler."""
     init_db()
+    yield
+
+
+app = FastAPI(title="Spectre API", version="0.3.0", lifespan=lifespan)
 
 
 # ── Agents ────────────────────────────────────────────────────────────────────
