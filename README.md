@@ -2,8 +2,9 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![Tests](https://img.shields.io/badge/tests-189%20passing-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-221%20passing-brightgreen.svg)](#testing)
 [![Code Style](https://img.shields.io/badge/code%20style-ruff-black.svg)](https://github.com/astral-sh/ruff)
+[![Type Checked](https://img.shields.io/badge/type%20checked-mypy-blue.svg)](https://mypy-lang.org/)
 
 **Autonomous AI Engineering Operating System for Fedora Linux**
 
@@ -12,7 +13,7 @@ Spectre monitors, maintains, secures, and manages your Linux workstation through
 ## Features
 
 - **8 Intelligent Agents** — Real system integration with psutil, subprocess, and API calls
-- **29 CLI Commands** — Complete control from the terminal
+- **31 CLI Commands** — Complete control from the terminal
 - **24 REST API Endpoints** — Programmatic access with API key authentication
 - **Custom Workflows** — Load and execute YAML/JSON workflows at runtime
 - **Scheduled Tasks** — Cron and interval-based automation
