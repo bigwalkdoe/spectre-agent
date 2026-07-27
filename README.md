@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![Tests](https://img.shields.io/badge/tests-221%20passing-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-296%20passing-brightgreen.svg)](#testing)
 [![Code Style](https://img.shields.io/badge/code%20style-ruff-black.svg)](https://github.com/astral-sh/ruff)
 [![Type Checked](https://img.shields.io/badge/type%20checked-mypy-blue.svg)](https://mypy-lang.org/)
 
@@ -15,10 +15,10 @@ Spectre monitors, maintains, secures, and manages your Linux workstation through
 - **8 Intelligent Agents** — Real system integration with psutil, subprocess, and API calls
 - **31 CLI Commands** — Complete control from the terminal
 - **24 REST API Endpoints** — Programmatic access with API key authentication
+- **Enterprise TUI** — Interactive Textual dashboard with real-time metrics
 - **Custom Workflows** — Load and execute YAML/JSON workflows at runtime
 - **Scheduled Tasks** — Cron and interval-based automation
 - **Plugin System** — Extensible architecture with manifest-based plugins
-- **Interactive Dashboard** — Rich TUI for real-time monitoring
 - **Data Import/Export** — JSON and CSV support
 - **Docker Support** — Containerized deployment with docker-compose
 
@@ -46,6 +46,9 @@ spectre doctor
 
 # View system status
 spectre status
+
+# Launch enterprise TUI dashboard
+spectre dashboard
 
 # Run a workflow
 spectre workflows morning-startup
@@ -138,6 +141,21 @@ spectre daemon start
 | `spectre export` | Export data (`--format json/csv`) |
 | `spectre import` | Import data from JSON |
 | `spectre report` | Generate reports |
+
+## TUI Dashboard
+
+The enterprise-grade Textual TUI dashboard provides real-time system monitoring:
+
+```bash
+spectre dashboard
+```
+
+**Features:**
+- **7 Tabs**: Dashboard, Agents, Workflows, Security, Logs, Reports, Settings
+- **Real-time Metrics**: CPU, Memory, Disk, Network with sparklines (2s refresh)
+- **Keyboard Shortcuts**: `1-7` tabs, `q` quit, `r` refresh, `d` dark mode
+- **Dark/Light Mode**: Toggle with `d`
+- **Interactive**: Navigate with keyboard, view detailed metrics
 
 ## Workflows
 
