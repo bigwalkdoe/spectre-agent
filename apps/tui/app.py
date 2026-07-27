@@ -25,7 +25,6 @@ from textual.widgets import (
     Select,
     Sparkline,
     Static,
-    TabbedContent,
 )
 
 from packages.config.settings import load_settings
@@ -486,6 +485,7 @@ class SpectreTUI(App):
         self.kernel = _get_kernel()
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
+        """Handle sidebar navigation selection."""
         tab_map = {
             "nav-dashboard": "tab-dashboard",
             "nav-agents": "tab-agents",
@@ -496,7 +496,7 @@ class SpectreTUI(App):
             "nav-settings": "tab-settings",
         }
         if event.item.id in tab_map:
-            self.query_one(TabbedContent).active = tab_map[event.item.id]
+            self._switch_tab(tab_map[event.item.id])
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle tab button presses."""
@@ -511,7 +511,17 @@ class SpectreTUI(App):
             "btn-tab-settings": "tab-settings",
         }
         if event.button.id in tab_map:
-            self.query_one(TabbedContent).active = tab_map[event.button.id]
+            self._switch_tab(tab_map[event.button.id])
+
+    def _switch_tab(self, tab_id: str) -> None:
+        """Switch visible tab by toggling hidden classes."""
+        # Hide all tabs
+        for widget in self.query(
+            "#tab-dashboard, #tab-agents, #tab-workflows, #tab-security, #tab-logs, #tab-reports, #tab-settings"
+        ):
+            widget.add_class("hidden")
+        # Show selected tab
+        self.query_one(f"#{tab_id}").remove_class("hidden")
 
     def action_refresh(self) -> None:
         self.notify("Refreshing...", timeout=1)
@@ -520,7 +530,7 @@ class SpectreTUI(App):
                 widget.on_mount()
 
     def action_focus_tab(self, tab_id: str) -> None:
-        self.query_one(TabbedContent).active = tab_id
+        self._switch_tab(tab_id)
 
     def action_toggle_dark(self) -> None:
         self.dark = not self.dark
