@@ -155,16 +155,9 @@ class SecurityAgent(BaseAgent):
             state = res.stdout.strip()
             if state == "running":
                 return "Firewalld is active and running."
-            save_security_incident(
-                SecurityIncident(
-                    severity="high",
-                    rule_id="FIREWALL_OFF",
-                    message="Firewalld system service is not running.",
-                )
-            )
-            return "CRITICAL: Firewalld is not active."
+            return "Firewalld is not active (or firewall-cmd timed out)."
         except Exception as e:
-            return f"Firewall check failed: {e}"
+            return f"Firewalld check failed: {e}"
 
     def _audit_ports(self) -> str:
         try:

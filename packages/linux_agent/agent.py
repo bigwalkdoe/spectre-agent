@@ -224,11 +224,15 @@ class LinuxAgent(BaseAgent):
             return f"Failed to check SELinux: {e}"
 
     def _run_firewall_check(self) -> str:
+        if not self.tools.get("firewall-cmd"):
+            return "firewall-cmd not available. Firewall check skipped."
         try:
             res = subprocess.run(
                 ["firewall-cmd", "--state"], capture_output=True, text=True, timeout=5
             )
             state = res.stdout.strip()
-            return f"Firewalld service is: {state}."
+            if state == "running":
+                return "Firewalld service is: running."
+            return f"Firewalld service is: {state} (inactive)."
         except Exception as e:
-            return f"Failed to check firewalld state: {e}"
+            return f"Firewalld check failed: {e}"
