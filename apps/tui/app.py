@@ -43,6 +43,7 @@ if TYPE_CHECKING:
 # Cached Metrics Widget - Optimized Rendering
 # ════════════════════════════════════════════════════════════════════════════
 
+
 class MetricsWidget(Static):
     """Real-time system metrics display with cached sparklines."""
 
@@ -65,6 +66,7 @@ class MetricsWidget(Static):
     def update_metrics(self) -> None:
         if not self.engine:
             from apps.cli.main import _get_engine
+
             self.engine = _get_engine()
 
         try:
@@ -89,6 +91,7 @@ class MetricsWidget(Static):
                 self._last_values["disk"] = disk_val
 
             import psutil
+
             net = psutil.net_io_counters()
             if self._last_net:
                 sent_mb = (net.bytes_sent - self._last_net.bytes_sent) / 1024 / 1024
@@ -106,7 +109,6 @@ class MetricsWidget(Static):
             pass
 
     def render(self) -> Columns:
-
         cpu_val = self.cpu_history[-1] if self.cpu_history else 0
         mem_val = self.mem_history[-1] if self.mem_history else 0
         disk_val = self.disk_history[-1] if self.disk_history else 0
@@ -157,6 +159,7 @@ class MetricsWidget(Static):
 # Agent Status Widget - Lazy Loaded
 # ════════════════════════════════════════════════════════════════════════════
 
+
 class AgentStatusWidget(Static):
     """Agent status with lazy loading."""
 
@@ -176,6 +179,7 @@ class AgentStatusWidget(Static):
         try:
             if not self.engine:
                 from apps.cli.main import _get_engine
+
                 self.engine = _get_engine()
 
             table = self.query_one("#agents-table", DataTable)
@@ -198,6 +202,7 @@ class AgentStatusWidget(Static):
 # Workflow Panel
 # ════════════════════════════════════════════════════════════════════════════
 
+
 class WorkflowPanel(Static):
     """Workflow execution and monitoring."""
 
@@ -217,6 +222,7 @@ class WorkflowPanel(Static):
     def update_workflows(self) -> None:
         try:
             from apps.cli.main import _get_engine
+
             engine = _get_engine()
             table = self.query_one("#workflows-table", DataTable)
             table.clear(columns=True)
@@ -244,6 +250,7 @@ class WorkflowPanel(Static):
 # Security Widget - Runs async, only on mount
 # ════════════════════════════════════════════════════════════════════════════
 
+
 class SecurityWidget(Static):
     """Security alerts and audit results - runs once on mount."""
 
@@ -262,6 +269,7 @@ class SecurityWidget(Static):
             table.add_columns("Check", "Status", "Details")
 
             from apps.cli.main import _run_agent_action
+
             checks = [
                 ("SELinux", "selinux-audit"),
                 ("Firewall", "firewall-audit"),
@@ -287,13 +295,17 @@ class SecurityWidget(Static):
 # System Log Widget - Only refreshes when visible
 # ════════════════════════════════════════════════════════════════════════════
 
+
 class SystemLogWidget(Static):
     """Real-time system log viewer - only refreshes when visible."""
 
     def compose(self) -> ComposeResult:
         yield Horizontal(
-            Select([("All", "all"), ("Errors", "error"), ("Warnings", "warning"), ("Info", "info")],
-                   id="log-filter", prompt="Filter"),
+            Select(
+                [("All", "all"), ("Errors", "error"), ("Warnings", "warning"), ("Info", "info")],
+                id="log-filter",
+                prompt="Filter",
+            ),
             Input(placeholder="Search...", id="log-search"),
         )
         yield Log(id="system-log", max_lines=1000)
@@ -325,6 +337,7 @@ class SystemLogWidget(Static):
 # ════════════════════════════════════════════════════════════════════════════
 # Settings Panel
 # ════════════════════════════════════════════════════════════════════════════
+
 
 class SettingsPanel(Static):
     """Configuration management."""
@@ -366,6 +379,7 @@ class SettingsPanel(Static):
 # Report Viewer
 # ════════════════════════════════════════════════════════════════════════════
 
+
 class ReportViewer(Static):
     """View generated reports."""
 
@@ -398,6 +412,7 @@ class ReportViewer(Static):
 # ════════════════════════════════════════════════════════════════════════════
 # Main Application
 # ════════════════════════════════════════════════════════════════════════════
+
 
 class SpectreTUI(App):
     """Main Spectre TUI Application - Optimized for performance."""
@@ -530,6 +545,7 @@ class SpectreTUI(App):
     def on_mount(self) -> None:
         init_db()
         from apps.cli.main import _get_engine, _get_kernel
+
         self.engine = _get_engine()
         self.kernel = _get_kernel()
 
@@ -583,8 +599,13 @@ class SpectreTUI(App):
         self.notify("Refreshing...", timeout=1)
         # Find visible tab and call its on_mount
         tab_ids = [
-            "#tab-dashboard", "#tab-agents", "#tab-workflows",
-            "#tab-security", "#tab-logs", "#tab-reports", "#tab-settings"
+            "#tab-dashboard",
+            "#tab-agents",
+            "#tab-workflows",
+            "#tab-security",
+            "#tab-logs",
+            "#tab-reports",
+            "#tab-settings",
         ]
         for widget in self.query(*tab_ids):
             if not widget.has_class("hidden") and hasattr(widget, "on_mount"):

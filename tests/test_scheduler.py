@@ -78,6 +78,21 @@ def test_cron_no_match() -> None:
     assert not cron_matches("30 6 * * *", dt)
 
 
+def test_cron_weekday_semantics() -> None:
+    """Cron weekday field is 0=Sunday; 2025-01-12 is a Sunday."""
+    sunday = datetime(2025, 1, 12, 12, 0, tzinfo=UTC)
+    assert cron_matches("0 12 * * 0", sunday)  # 0 == Sunday in cron
+    assert not cron_matches("0 12 * * 1", sunday)  # 1 == Monday
+
+
+def test_cron_weekday_range_mon_to_fri() -> None:
+    """'1-5' means Monday-Friday; 2025-01-15 is a Wednesday."""
+    wednesday = datetime(2025, 1, 15, 9, 0, tzinfo=UTC)
+    assert cron_matches("0 9 * * 1-5", wednesday)
+    sunday = datetime(2025, 1, 12, 9, 0, tzinfo=UTC)
+    assert not cron_matches("0 9 * * 1-5", sunday)
+
+
 # ── is_due ────────────────────────────────────────────────────────────────────
 
 

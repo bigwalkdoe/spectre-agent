@@ -21,7 +21,7 @@ class AIAgent(BaseAgent):
                 self.ollama_available = True
         except Exception:
             self.ollama_available = False
-        if self.context and hasattr(self.context, 'service_bus') and self.context.service_bus:
+        if self.context and hasattr(self.context, "service_bus") and self.context.service_bus:
             self.context.service_bus.register_service(
                 "ai", "agent", self, actions=["ollama-ping", "list-models", "benchmark-model"]
             )
@@ -129,7 +129,7 @@ class AIAgent(BaseAgent):
             models = resp.json().get("models", [])
             if not models:
                 return "Ollama is responsive, but no local models are installed."
-            details = [f"{m['name']} ({m.get('size', 0) // (1024*1024)} MB)" for m in models]
+            details = [f"{m['name']} ({m.get('size', 0) // (1024 * 1024)} MB)" for m in models]
             return f"Available models: {', '.join(details)}."
         except Exception as e:
             return f"Failed to list models: {e}"
@@ -141,10 +141,10 @@ class AIAgent(BaseAgent):
             models = resp.json().get("models", [])
             if not models:
                 return "Cannot run benchmark: No models installed."
-            
+
             # Select first model (or configuration model)
             target_model = self.config.get("benchmark_model", models[0]["name"])
-            
+
             start = time.monotonic()
             post_resp = httpx.post(
                 f"{self.ollama_url}/api/generate",
@@ -152,7 +152,7 @@ class AIAgent(BaseAgent):
                     "model": target_model,
                     "prompt": "Respond with exactly one word: 'Ready'.",
                     "stream": False,
-                    "options": {"num_predict": 5}
+                    "options": {"num_predict": 5},
                 },
                 timeout=30.0,
             )

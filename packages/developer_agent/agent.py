@@ -24,7 +24,7 @@ class DeveloperAgent(BaseAgent):
             "npm": shutil.which("npm") is not None,
             "node": shutil.which("node") is not None,
         }
-        if self.context and hasattr(self.context, 'service_bus') and self.context.service_bus:
+        if self.context and hasattr(self.context, "service_bus") and self.context.service_bus:
             self.context.service_bus.register_service("developer", "agent", self, actions=list(self.tools.keys()))
 
     def plan(self) -> list[str]:
@@ -94,7 +94,9 @@ class DeveloperAgent(BaseAgent):
         try:
             res = subprocess.run(
                 ["git", "branch", "--show-current"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             branch = res.stdout.strip() or None
         except Exception:
@@ -103,7 +105,9 @@ class DeveloperAgent(BaseAgent):
         try:
             res = subprocess.run(
                 ["git", "status", "--porcelain"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             dirty = bool(res.stdout.strip())
         except Exception:
@@ -112,7 +116,9 @@ class DeveloperAgent(BaseAgent):
         try:
             res = subprocess.run(
                 ["git", "rev-list", "--count", "@{u}..HEAD"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             if res.returncode == 0:
                 ahead = int(res.stdout.strip() or 0)
@@ -151,7 +157,9 @@ class DeveloperAgent(BaseAgent):
         try:
             res = subprocess.run(
                 ["git", "status", "--short"],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             lines = [line.strip() for line in res.stdout.splitlines() if line.strip()]
             if lines:
@@ -164,7 +172,9 @@ class DeveloperAgent(BaseAgent):
         try:
             res = subprocess.run(
                 ["pip", "list", "--outdated", "--format=json"],
-                capture_output=True, text=True, timeout=30,
+                capture_output=True,
+                text=True,
+                timeout=30,
             )
             if res.returncode == 0 and res.stdout.strip():
                 import json
@@ -182,7 +192,9 @@ class DeveloperAgent(BaseAgent):
         try:
             res = subprocess.run(
                 ["pytest", "--tb=short", "-q"],
-                capture_output=True, text=True, timeout=120,
+                capture_output=True,
+                text=True,
+                timeout=120,
             )
             output = res.stdout.strip()
             if res.returncode == 0:
@@ -195,7 +207,9 @@ class DeveloperAgent(BaseAgent):
         try:
             res = subprocess.run(
                 ["ruff", "check", "."],
-                capture_output=True, text=True, timeout=30,
+                capture_output=True,
+                text=True,
+                timeout=30,
             )
             output = res.stdout.strip()
             if res.returncode == 0:
@@ -209,7 +223,9 @@ class DeveloperAgent(BaseAgent):
         try:
             res = subprocess.run(
                 ["mypy", ".", "--ignore-missing-imports"],
-                capture_output=True, text=True, timeout=60,
+                capture_output=True,
+                text=True,
+                timeout=60,
             )
             output = res.stdout.strip()
             if res.returncode == 0:

@@ -21,7 +21,7 @@ class PublishingAgent(BaseAgent):
         }
         self.registry = self.config.get("registry", "pypi")
         self.package_name = self.config.get("package_name", "spectre")
-        if self.context and hasattr(self.context, 'service_bus') and self.context.service_bus:
+        if self.context and hasattr(self.context, "service_bus") and self.context.service_bus:
             self.context.service_bus.register_service(
                 "publishing", "agent", self, actions=["check-version", "validate-dist", "check-git-status"]
             )
@@ -117,7 +117,9 @@ class PublishingAgent(BaseAgent):
         try:
             res = subprocess.run(
                 ["ls", "-la", "dist/"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             if res.returncode == 0 and res.stdout.strip():
                 files = [line.strip() for line in res.stdout.splitlines() if line.strip()]
@@ -131,7 +133,9 @@ class PublishingAgent(BaseAgent):
         try:
             res = subprocess.run(
                 ["git", "status", "--porcelain"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             if res.stdout.strip():
                 changes = len(res.stdout.strip().splitlines())
@@ -161,7 +165,9 @@ class PublishingAgent(BaseAgent):
         try:
             res = subprocess.run(
                 ["git", "describe", "--tags", "--abbrev=0"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             if res.returncode == 0:
                 return res.stdout.strip() or None
@@ -174,7 +180,9 @@ class PublishingAgent(BaseAgent):
         try:
             res = subprocess.run(
                 ["git", "status", "--porcelain"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             return bool(res.stdout.strip())
         except Exception:

@@ -155,6 +155,7 @@ async def workflow_definitions(_: bool = Depends(verify_api_key)) -> dict[str, A
 async def load_workflows(directory: str, _: bool = Depends(verify_api_key)) -> dict[str, Any]:
     """Load custom workflows from a directory."""
     from pathlib import Path
+
     eng = _get_engine()
     try:
         count = eng.load_workflows(Path(directory))
@@ -177,6 +178,7 @@ async def get_version() -> dict[str, str]:
     """Get Spectre version."""
     from importlib.metadata import PackageNotFoundError
     from importlib.metadata import version as get_version
+
     try:
         spectre_version = get_version("spectre")
     except PackageNotFoundError:
@@ -203,7 +205,8 @@ async def kernel_start(_: bool = Depends(verify_api_key)) -> dict[str, str]:
     k = _get_kernel()
     if k.running:
         return {"status": "already_running"}
-    k.start()
+    # Signal handlers stay with uvicorn; the Kernel must not hijack them.
+    k.start(install_signal_handlers=False)
     return {"status": "started"}
 
 
@@ -223,8 +226,8 @@ async def service_bus_status(_: bool = Depends(verify_api_key)) -> dict[str, Any
     bus = _get_service_bus()
     return {
         "services": [{"name": s.name, "type": s.service_type, "metadata": s.metadata} for s in bus.list_services()],
-        "topics": list(bus._handlers.keys()),
-        "request_handlers": list(bus._request_handlers.keys()),
+        "topics": bus.get_topics(),
+        "request_handlers": bus.get_request_actions(),
     }
 
 
@@ -237,6 +240,7 @@ async def get_events(
 ) -> list[dict[str, Any]]:
     """Return recent events from the EventBus."""
     from packages.memory.db import get_events as db_get_events
+
     init_db()
     records = db_get_events(event_type=event_type, limit=limit)
     return [
@@ -260,9 +264,7 @@ async def list_schedule(_: bool = Depends(verify_api_key)) -> list[dict[str, Any
     from packages.memory.db import engine as db_engine
 
     with Session(db_engine) as session:
-        config = session.exec(
-            select(Configuration).where(Configuration.key == "scheduled_tasks")
-        ).first()
+        config = session.exec(select(Configuration).where(Configuration.key == "scheduled_tasks")).first()
         if not config:
             return []
         tasks = json.loads(config.value)
@@ -281,9 +283,7 @@ async def add_schedule(name: str, schedule: str, workflow: str, _: bool = Depend
     from packages.memory.db import engine as db_engine
 
     with Session(db_engine) as session:
-        config = session.exec(
-            select(Configuration).where(Configuration.key == "scheduled_tasks")
-        ).first()
+        config = session.exec(select(Configuration).where(Configuration.key == "scheduled_tasks")).first()
         tasks = json.loads(config.value) if config else {}
         tasks[name] = {"schedule": schedule, "workflow": workflow, "enabled": True}
         if config:
@@ -304,9 +304,7 @@ async def remove_schedule(name: str, _: bool = Depends(verify_api_key)) -> dict[
     from packages.memory.db import engine as db_engine
 
     with Session(db_engine) as session:
-        config = session.exec(
-            select(Configuration).where(Configuration.key == "scheduled_tasks")
-        ).first()
+        config = session.exec(select(Configuration).where(Configuration.key == "scheduled_tasks")).first()
         if not config:
             raise HTTPException(404, "No scheduled tasks")
         tasks = json.loads(config.value)

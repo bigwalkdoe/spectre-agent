@@ -178,9 +178,7 @@ def save_configuration(config: Configuration) -> None:
 
 def get_configuration(key: str, profile: str = "default") -> str | None:
     with Session(engine) as session:
-        stmt = select(Configuration).where(
-            Configuration.key == key, Configuration.profile == profile
-        )
+        stmt = select(Configuration).where(Configuration.key == key, Configuration.profile == profile)
         result = session.exec(stmt).first()
         return result.value if result else None
 

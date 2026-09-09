@@ -29,9 +29,7 @@ class SpectreDaemon:
         # Initialize Kernel (replaces manual event_bus + scheduler)
         self.kernel = Kernel()
         self.service_bus = (
-            self.kernel.container.resolve("service_bus")
-            if self.kernel.container.has("service_bus")
-            else ServiceBus()
+            self.kernel.container.resolve("service_bus") if self.kernel.container.has("service_bus") else ServiceBus()
         )
 
         # Initialize engine and monitoring with context
@@ -70,6 +68,7 @@ class SpectreDaemon:
 
         # Block until shutdown
         import time
+
         while self.kernel.running:
             time.sleep(1)
 

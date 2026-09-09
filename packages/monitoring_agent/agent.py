@@ -21,7 +21,7 @@ class MonitoringAgent(BaseAgent):
             "swap_percent": self.config.get("swap_threshold", 80),
             "disk_percent": self.config.get("disk_threshold", 90),
         }
-        if self.context and hasattr(self.context, 'service_bus') and self.context.service_bus:
+        if self.context and hasattr(self.context, "service_bus") and self.context.service_bus:
             self.context.service_bus.register_service(
                 "monitoring", "agent", self, actions=["collect-metrics", "check-thresholds"]
             )

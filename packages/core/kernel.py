@@ -5,10 +5,11 @@ from __future__ import annotations
 import logging
 import signal
 import sys
+import threading
 from collections.abc import Callable
 from typing import Any
 
-from packages.core.event_bus import EventBus
+from packages.core.event_bus import EventBus, run_coroutine_sync
 from packages.core.scheduler import TaskScheduler
 
 logger = logging.getLogger("spectre.kernel")
@@ -71,6 +72,7 @@ class Kernel:
     def _create_service_bus(self) -> Any:
         """Create the ServiceBus singleton."""
         from packages.core.service_bus import ServiceBus
+
         bus = ServiceBus()
         self.container.register("service_bus", bus)
         return bus
@@ -83,30 +85,27 @@ class Kernel:
         """Register a function to run on shutdown."""
         self._shutdown_hooks.append(hook)
 
-    def start(self) -> None:
-        """Start the kernel and all services."""
+    def start(self, install_signal_handlers: bool = True) -> None:
+        """Start the kernel and all services.
+
+        Args:
+            install_signal_handlers: Install SIGINT/SIGTERM handlers for
+                graceful shutdown. Set to False when embedding the Kernel in
+                another process manager (e.g. uvicorn) that owns signal
+                handling.
+        """
         logger.info("Spectre Kernel starting...")
         self._running = True
 
-        # Set up signal handlers
-        signal.signal(signal.SIGTERM, self._handle_signal)
-        signal.signal(signal.SIGINT, self._handle_signal)
+        # Set up signal handlers (only possible from the main thread)
+        if install_signal_handlers:
+            self._register_signal_handlers()
 
         # Start scheduler
         self.scheduler.start(interval=10.0)
 
         # Publish startup event
-        import asyncio
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.ensure_future(self.event_bus.publish("SystemStarted"))
-            else:
-                loop.run_until_complete(self.event_bus.publish("SystemStarted"))
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            loop.run_until_complete(self.event_bus.publish("SystemStarted"))
-            loop.close()
+        run_coroutine_sync(self.event_bus.publish("SystemStarted"))
 
         logger.info("Spectre Kernel started. Services: %s", self.container.list_services())
 
@@ -137,17 +136,25 @@ class Kernel:
         self.scheduler.stop()
 
         # Publish shutdown event
-        import asyncio
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.ensure_future(self.event_bus.publish("SystemStopped"))
-            else:
-                loop.run_until_complete(self.event_bus.publish("SystemStopped"))
-        except RuntimeError:
-            pass
+        run_coroutine_sync(self.event_bus.publish("SystemStopped"))
 
         logger.info("Spectre Kernel stopped.")
+
+    def _register_signal_handlers(self) -> None:
+        """Install SIGINT/SIGTERM handlers when running in the main thread.
+
+        ``signal.signal()`` raises ``ValueError`` outside the main thread
+        (e.g. when the Kernel is started from an API worker), so it is skipped
+        there; the daemon's graceful shutdown then relies on explicit ``stop()``.
+        """
+        if threading.current_thread() is not threading.main_thread():
+            logger.debug("Skipping signal handler registration (not main thread)")
+            return
+        try:
+            signal.signal(signal.SIGTERM, self._handle_signal)
+            signal.signal(signal.SIGINT, self._handle_signal)
+        except ValueError:
+            logger.debug("Signal handler registration not permitted in this context")
 
     def _handle_signal(self, signum: int, frame: Any) -> None:
         """Handle OS signals for graceful shutdown."""

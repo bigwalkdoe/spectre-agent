@@ -1,12 +1,29 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
 import logging
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+def run_coroutine_sync(coro: Coroutine[Any, Any, Any]) -> None:
+    """Run a coroutine from synchronous code.
+
+    If an event loop is already running in the current thread, the coroutine is
+    scheduled as a task on that loop. Otherwise it is executed on a fresh loop
+    (the modern replacement for the deprecated ``asyncio.get_event_loop()``
+    pattern).
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.run(coro)
+    else:
+        asyncio.ensure_future(coro, loop=loop)
 
 
 class EventBus:

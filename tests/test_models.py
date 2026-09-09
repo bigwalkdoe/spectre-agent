@@ -23,8 +23,12 @@ def test_system_metric_creation() -> None:
 
 def test_system_metric_with_optional() -> None:
     m = SystemMetric(
-        cpu_percent=50.0, memory_percent=60.0, swap_percent=10.0,
-        disk_percent=70.0, battery_percent=85.0, temperature_c=45.0,
+        cpu_percent=50.0,
+        memory_percent=60.0,
+        swap_percent=10.0,
+        disk_percent=70.0,
+        battery_percent=85.0,
+        temperature_c=45.0,
     )
     assert m.battery_percent == 85.0
     assert m.temperature_c == 45.0
@@ -32,8 +36,11 @@ def test_system_metric_with_optional() -> None:
 
 def test_maintenance_record_creation() -> None:
     r = MaintenanceRecord(
-        agent="linux", action="dnf-check-update", status="success",
-        log_output="No updates available", duration_ms=1200,
+        agent="linux",
+        action="dnf-check-update",
+        status="success",
+        log_output="No updates available",
+        duration_ms=1200,
     )
     assert r.agent == "linux"
     assert r.status == "success"
@@ -42,7 +49,9 @@ def test_maintenance_record_creation() -> None:
 
 def test_security_incident_creation() -> None:
     i = SecurityIncident(
-        severity="high", rule_id="FIREWALL_OFF", message="Firewall is not running",
+        severity="high",
+        rule_id="FIREWALL_OFF",
+        message="Firewall is not running",
     )
     assert i.severity == "high"
     assert i.resolved is False
@@ -63,8 +72,10 @@ def test_report_creation() -> None:
 
 def test_workflow_run_creation() -> None:
     w = WorkflowRun(
-        workflow="morning-startup", status="success",
-        duration_ms=5000, details='{"linux": {}}',
+        workflow="morning-startup",
+        status="success",
+        duration_ms=5000,
+        details='{"linux": {}}',
     )
     assert w.workflow == "morning-startup"
     assert w.status == "success"
@@ -72,8 +83,10 @@ def test_workflow_run_creation() -> None:
 
 def test_decision_creation() -> None:
     d = Decision(
-        context="system maintenance", decision="run weekly cleanup",
-        rationale="Disk usage above 80%", outcome="completed",
+        context="system maintenance",
+        decision="run weekly cleanup",
+        rationale="Disk usage above 80%",
+        outcome="completed",
     )
     assert d.decision == "run weekly cleanup"
     assert d.outcome == "completed"

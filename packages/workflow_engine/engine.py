@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from packages.core.agent import AgentContext
-from packages.core.event_bus import EventBus
+from packages.core.event_bus import EventBus, run_coroutine_sync
 from packages.core.service_bus import ServiceBus
 from packages.memory.db import WorkflowRun, save_workflow_run
 
@@ -241,16 +241,18 @@ def _parse_workflow_definition(data: dict[str, Any]) -> WorkflowDefinition | Non
     try:
         steps = []
         for step_data in data.get("steps", []):
-            steps.append(Step(
-                agent=step_data["agent"],
-                action=step_data["action"],
-                params=step_data.get("params", {}),
-                max_retries=step_data.get("max_retries", 0),
-                retry_delay_ms=step_data.get("retry_delay_ms", 1000),
-                rollback=step_data.get("rollback"),
-                on_success=step_data.get("on_success"),
-                on_failure=step_data.get("on_failure"),
-            ))
+            steps.append(
+                Step(
+                    agent=step_data["agent"],
+                    action=step_data["action"],
+                    params=step_data.get("params", {}),
+                    max_retries=step_data.get("max_retries", 0),
+                    retry_delay_ms=step_data.get("retry_delay_ms", 1000),
+                    rollback=step_data.get("rollback"),
+                    on_success=step_data.get("on_success"),
+                    on_failure=step_data.get("on_failure"),
+                )
+            )
 
         return WorkflowDefinition(
             name=data["name"],
@@ -326,7 +328,7 @@ class WorkflowEngine:
             agent.initialize()
             agents[name] = agent
             # Register with service bus
-            actions = getattr(agent, 'tools', {}).keys() if hasattr(agent, 'tools') else []
+            actions = getattr(agent, "tools", {}).keys() if hasattr(agent, "tools") else []
             self.service_bus.register_service(name, "agent", agent, actions=actions)
 
         return agents
@@ -482,12 +484,15 @@ class WorkflowEngine:
             pass
 
         # Publish workflow completed event
-        self._publish_event("workflow.completed", {
-            "workflow": name,
-            "status": status,
-            "duration_ms": duration_ms,
-            "failed_steps": failed_steps,
-        })
+        self._publish_event(
+            "workflow.completed",
+            {
+                "workflow": name,
+                "status": status,
+                "duration_ms": duration_ms,
+                "failed_steps": failed_steps,
+            },
+        )
         # Publish custom completion event
         if definition.on_complete:
             self._publish_event(definition.on_complete, {"workflow": name, "status": status})
@@ -503,19 +508,9 @@ class WorkflowEngine:
     def _publish_event(self, event: str, data: Any = None) -> None:
         """Publish an event synchronously, logging any errors."""
         try:
-            import asyncio
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.ensure_future(self.event_bus.publish(event, data))
-            else:
-                loop.run_until_complete(self.event_bus.publish(event, data))
-        except RuntimeError:
-            try:
-                loop = asyncio.new_event_loop()
-                loop.run_until_complete(self.event_bus.publish(event, data))
-                loop.close()
-            except Exception:
-                logger.debug("Failed to publish event: %s", event)
+            run_coroutine_sync(self.event_bus.publish(event, data))
+        except Exception:
+            logger.debug("Failed to publish event: %s", event)
 
     def register_plugin_hooks(self, plugin_loader: Any) -> None:
         """Register plugin event listeners with the EventBus.

@@ -18,7 +18,7 @@ class DevOpsAgent(BaseAgent):
             "docker": shutil.which("docker") is not None,
             "kubectl": shutil.which("kubectl") is not None,
         }
-        if self.context and hasattr(self.context, 'service_bus') and self.context.service_bus:
+        if self.context and hasattr(self.context, "service_bus") and self.context.service_bus:
             self.context.service_bus.register_service("devops", "agent", self, actions=list(self.tools.keys()))
 
     def plan(self) -> list[str]:
@@ -86,18 +86,14 @@ class DevOpsAgent(BaseAgent):
 
         if self.tools.get("podman"):
             try:
-                res = subprocess.run(
-                    ["podman", "ps", "-q"], capture_output=True, text=True, timeout=5
-                )
+                res = subprocess.run(["podman", "ps", "-q"], capture_output=True, text=True, timeout=5)
                 podman_count = len([x for x in res.stdout.splitlines() if x.strip()])
             except Exception:
                 pass
 
         if self.tools.get("docker"):
             try:
-                res = subprocess.run(
-                    ["docker", "ps", "-q"], capture_output=True, text=True, timeout=5
-                )
+                res = subprocess.run(["docker", "ps", "-q"], capture_output=True, text=True, timeout=5)
                 docker_count = len([x for x in res.stdout.splitlines() if x.strip()])
             except Exception:
                 pass

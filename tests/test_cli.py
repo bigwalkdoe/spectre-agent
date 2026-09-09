@@ -13,6 +13,7 @@ from apps.cli.main import app, main
 
 # ── Help command tests ────────────────────────────────────────────────────────
 
+
 def test_help() -> None:
     """CLI --help should exit 0."""
     try:
@@ -191,6 +192,7 @@ def test_import_help() -> None:
 
 # ── Core functionality tests ──────────────────────────────────────────────────
 
+
 def test_main_returns_int() -> None:
     """main() should return an integer exit code."""
     with patch("apps.cli.main._get_engine") as mock_engine:
@@ -208,6 +210,7 @@ def test_unknown_command() -> None:
 
 
 # ── Command execution tests ───────────────────────────────────────────────────
+
 
 def test_kernel_status() -> None:
     """kernel status should show kernel info."""
@@ -618,6 +621,7 @@ def test_export_csv() -> None:
         app(["export", "--output", output, "--format", "csv"], standalone_mode=False)
         assert os.path.exists(output)
         import csv
+
         with open(output) as f:
             reader = csv.DictReader(f)
             rows = list(reader)

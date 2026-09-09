@@ -145,8 +145,10 @@ def test_service_bus_pubsub() -> None:
 
 def test_service_bus_unsubscribe() -> None:
     bus = ServiceBus()
+
     def handler(data):
         pass
+
     bus.subscribe("test", handler)
     bus.unsubscribe("test", handler)
     assert bus.get_subscribers("test") == []
@@ -194,14 +196,29 @@ def test_agent_accepts_context() -> None:
     ctx = AgentContext(service_bus=bus)
 
     class TestAgent(BaseAgent):
-        def initialize(self): pass
-        def plan(self): return []
-        def execute(self, plan): return {}
-        def observe(self): return {}
-        def verify(self): return True
-        def report(self, results): return ""
-        def recover(self, error): return True
-        def shutdown(self): pass
+        def initialize(self):
+            pass
+
+        def plan(self):
+            return []
+
+        def execute(self, plan):
+            return {}
+
+        def observe(self):
+            return {}
+
+        def verify(self):
+            return True
+
+        def report(self, results):
+            return ""
+
+        def recover(self, error):
+            return True
+
+        def shutdown(self):
+            pass
 
     agent = TestAgent("test", context=ctx)
     assert agent.context is ctx

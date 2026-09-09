@@ -42,9 +42,7 @@ def test_agent_config_defaults() -> None:
 
 
 def test_settings_with_agents() -> None:
-    s = SpectreSettings(
-        agents={"linux": AgentConfig(enabled=True), "security": AgentConfig(enabled=False)}
-    )
+    s = SpectreSettings(agents={"linux": AgentConfig(enabled=True), "security": AgentConfig(enabled=False)})
     assert s.agents["linux"].enabled is True
     assert s.agents["security"].enabled is False
 
@@ -64,8 +62,6 @@ def test_load_settings_missing_file() -> None:
 
 
 def test_settings_with_schedules() -> None:
-    s = SpectreSettings(
-        schedules=[WorkflowSchedule(name="morning", schedule="every 24h")]
-    )
+    s = SpectreSettings(schedules=[WorkflowSchedule(name="morning", schedule="every 24h")])
     assert len(s.schedules) == 1
     assert s.schedules[0].name == "morning"

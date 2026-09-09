@@ -19,7 +19,7 @@ class DocumentationAgent(BaseAgent):
             "git": True,
         }
         self.project_root = Path(self.config.get("project_root", "."))
-        if self.context and hasattr(self.context, 'service_bus') and self.context.service_bus:
+        if self.context and hasattr(self.context, "service_bus") and self.context.service_bus:
             self.context.service_bus.register_service(
                 "documentation", "agent", self, actions=["scan-docs", "check-links", "coverage-report"]
             )

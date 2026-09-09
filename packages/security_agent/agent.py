@@ -26,7 +26,7 @@ class SecurityAgent(BaseAgent):
             "getenforce": shutil.which("getenforce") is not None,
             "firewall-cmd": shutil.which("firewall-cmd") is not None,
         }
-        if self.context and hasattr(self.context, 'service_bus') and self.context.service_bus:
+        if self.context and hasattr(self.context, "service_bus") and self.context.service_bus:
             self.context.service_bus.register_service("security", "agent", self, actions=list(self.tools.keys()))
 
     def plan(self) -> list[str]:
@@ -149,13 +149,28 @@ class SecurityAgent(BaseAgent):
         if not self.tools.get("firewall-cmd"):
             return "firewall-cmd missing. Firewalld audit skipped."
         try:
-            res = subprocess.run(
-                ["firewall-cmd", "--state"], capture_output=True, text=True, timeout=5
-            )
+            res = subprocess.run(["firewall-cmd", "--state"], capture_output=True, text=True, timeout=5)
             state = res.stdout.strip()
             if state == "running":
                 return "Firewalld is active and running."
-            return "Firewalld is not active (or firewall-cmd timed out)."
+            save_security_incident(
+                SecurityIncident(
+                    severity="high",
+                    rule_id="FIREWALL_OFF",
+                    message="Firewalld system service is not running.",
+                )
+            )
+            return "CRITICAL: Firewalld is not active."
+        except subprocess.TimeoutExpired:
+            # firewall-cmd blocks on dbus when the firewalld service is dead/not responding.
+            save_security_incident(
+                SecurityIncident(
+                    severity="high",
+                    rule_id="FIREWALL_OFF",
+                    message="Firewalld is not responding (service not running or dbus unavailable).",
+                )
+            )
+            return "CRITICAL: Firewalld is not active (service not responding)."
         except Exception as e:
             return f"Firewalld check failed: {e}"
 
@@ -167,11 +182,10 @@ class SecurityAgent(BaseAgent):
                     addr = conn.laddr.ip or "*"
                     listening.append(f"{addr}:{conn.laddr.port}")
             listening = sorted(list(set(listening)))
-            
+
             # Check for generic listening on wildcard address for non-local services
             wildcards = [
-                p for p in listening
-                if p.startswith("0.0.0.0:") or p.startswith("*:") or p.startswith("[::]:")
+                p for p in listening if p.startswith("0.0.0.0:") or p.startswith("*:") or p.startswith("[::]:")
             ]
             if wildcards:
                 save_security_incident(
@@ -193,13 +207,13 @@ class SecurityAgent(BaseAgent):
             "private_key": re.compile(r"-----BEGIN [A-Z]+ PRIVATE KEY-----"),
             "generic_secret": re.compile(
                 r"(api_key|secret_key|password|token)\s*=\s*['\"][A-Za-z0-9_-]{20,}['\"]", re.IGNORECASE
-            )
+            ),
         }
-        
+
         found_incidents = []
         # Walk directories (ignore hidden files, virtual environments, .git, etc.)
         ignore_dirs = {".git", ".venv", ".mypy_cache", ".pytest_cache", "__pycache__", "node_modules"}
-        
+
         try:
             for path in scan_dir.rglob("*"):
                 if any(part in ignore_dirs for part in path.parts):
@@ -241,7 +255,7 @@ class SecurityAgent(BaseAgent):
                 if line.startswith("PermitRootLogin") and "no" in line.lower():
                     root_login = False
                     break
-            
+
             if root_login:
                 save_security_incident(
                     SecurityIncident(

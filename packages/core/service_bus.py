@@ -44,7 +44,10 @@ class ServiceBus:
     def register_service(self, name: str, service_type: str, instance: Any, **metadata: Any) -> None:
         """Register a service with the bus."""
         self._services[name] = ServiceInfo(
-            name=name, service_type=service_type, instance=instance, metadata=metadata,
+            name=name,
+            service_type=service_type,
+            instance=instance,
+            metadata=metadata,
         )
         # Persist registration metadata (without instance)
         self._registry[name] = {"type": service_type, "metadata": metadata}
@@ -136,3 +139,11 @@ class ServiceBus:
     def get_subscribers(self, topic: str) -> list[Callable]:
         """Get all subscribers for a topic."""
         return list(self._handlers.get(topic, []))
+
+    def get_topics(self) -> list[str]:
+        """Get all topics that have at least one subscriber."""
+        return list(self._handlers.keys())
+
+    def get_request_actions(self) -> list[str]:
+        """Get all registered request handler actions."""
+        return list(self._request_handlers.keys())

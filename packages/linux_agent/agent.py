@@ -23,7 +23,7 @@ class LinuxAgent(BaseAgent):
             "firewall-cmd": shutil.which("firewall-cmd") is not None,
             "getenforce": shutil.which("getenforce") is not None,
         }
-        if self.context and hasattr(self.context, 'service_bus') and self.context.service_bus:
+        if self.context and hasattr(self.context, "service_bus") and self.context.service_bus:
             self.context.service_bus.register_service("linux", "agent", self, actions=list(self.tools.keys()))
 
     def plan(self) -> list[str]:
@@ -188,7 +188,7 @@ class LinuxAgent(BaseAgent):
 
     def _run_flatpak_prune(self) -> str:
         try:
-            # We dry-run or attempt to uninstall unused flatpaks. 
+            # We dry-run or attempt to uninstall unused flatpaks.
             # Note: without root it might fail or target user flatpaks. Let's do --user cleanup.
             res = subprocess.run(
                 ["flatpak", "uninstall", "--unused", "--user", "-y"],
@@ -225,14 +225,15 @@ class LinuxAgent(BaseAgent):
 
     def _run_firewall_check(self) -> str:
         if not self.tools.get("firewall-cmd"):
-            return "firewall-cmd not available. Firewall check skipped."
+            return "firewall-cmd not available. Firewalld check skipped."
         try:
-            res = subprocess.run(
-                ["firewall-cmd", "--state"], capture_output=True, text=True, timeout=5
-            )
+            res = subprocess.run(["firewall-cmd", "--state"], capture_output=True, text=True, timeout=5)
             state = res.stdout.strip()
             if state == "running":
                 return "Firewalld service is: running."
             return f"Firewalld service is: {state} (inactive)."
+        except subprocess.TimeoutExpired:
+            # firewall-cmd blocks on dbus when the firewalld service is dead/not responding.
+            return "Firewalld is not responding (service not running or dbus unavailable)."
         except Exception as e:
-            return f"Firewalld check failed: {e}"
+            return f"Failed to check Firewalld state: {e}"

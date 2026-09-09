@@ -80,9 +80,14 @@ def parse_cron(expr: str) -> list[set[int]]:
 
 
 def cron_matches(cron_expr: str, dt: datetime) -> bool:
-    """Check if a datetime matches a cron expression."""
+    """Check if a datetime matches a cron expression.
+
+    Cron's weekday field runs 0-6 with 0 = Sunday, while Python's
+    ``datetime.weekday()`` runs Monday(0)-Sunday(6), so the value is remapped.
+    """
     fields = parse_cron(cron_expr)
-    checks = [dt.minute, dt.hour, dt.day, dt.month, dt.weekday()]
+    cron_weekday = (dt.weekday() + 1) % 7  # Monday=0 -> Sunday=0
+    checks = [dt.minute, dt.hour, dt.day, dt.month, cron_weekday]
     return all(v in s for v, s in zip(checks, fields, strict=False))
 
 

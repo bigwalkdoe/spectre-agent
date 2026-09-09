@@ -18,6 +18,7 @@ from packages.security_agent.agent import SecurityAgent
 def test_base_agent_is_abstract() -> None:
     """BaseAgent cannot be instantiated directly."""
     import pytest
+
     with pytest.raises(TypeError):
         BaseAgent("test")
 
@@ -25,8 +26,14 @@ def test_base_agent_is_abstract() -> None:
 def test_agent_lifecycle() -> None:
     """All agents implement the full lifecycle interface."""
     agents = [
-        LinuxAgent, DevOpsAgent, SecurityAgent, AIAgent,
-        DeveloperAgent, MonitoringAgent, DocumentationAgent, PublishingAgent,
+        LinuxAgent,
+        DevOpsAgent,
+        SecurityAgent,
+        AIAgent,
+        DeveloperAgent,
+        MonitoringAgent,
+        DocumentationAgent,
+        PublishingAgent,
     ]
     for cls in agents:
         agent = cls()

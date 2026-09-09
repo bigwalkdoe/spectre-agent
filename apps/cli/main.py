@@ -142,8 +142,9 @@ def service_bus(
         table = Table(title="Service Bus — Subscribed Topics", show_header=True)
         table.add_column("Topic", style="cyan")
         table.add_column("Subscribers", style="green")
-        for topic in set(list(bus._handlers.keys()) + list(bus._request_handlers.keys())):
-            count = len(bus.get_subscribers(topic)) + (1 if topic in bus._request_handlers else 0)
+        request_actions = set(bus.get_request_actions())
+        for topic in set(bus.get_topics()) | request_actions:
+            count = len(bus.get_subscribers(topic)) + (1 if topic in request_actions else 0)
             table.add_row(topic, str(count))
         console.print(table)
     else:
@@ -165,7 +166,7 @@ def core() -> None:
     table.add_column("Component", style="cyan")
     table.add_column("Status", style="green")
     table.add_row("Kernel", "running" if k.running else "stopped")
-    table.add_row("ServiceBus", f"{len(bus.list_services())} services, {len(bus._handlers)} topics")
+    table.add_row("ServiceBus", f"{len(bus.list_services())} services, {len(bus.get_topics())} topics")
     table.add_row("Profile", settings.profile)
     table.add_row("Log Level", settings.log_level)
     table.add_row("Ollama", settings.ollama.url)
@@ -194,9 +195,7 @@ def plugins(
         from packages.memory.db import engine as db_engine
 
         with Session(db_engine) as session:
-            plugin = session.exec(
-                select(PluginRecord).where(PluginRecord.name == remove)
-            ).first()
+            plugin = session.exec(select(PluginRecord).where(PluginRecord.name == remove)).first()
             if not plugin:
                 console.print(f"[yellow]Plugin '{remove}' not found[/yellow]")
                 return
@@ -232,12 +231,14 @@ def plugins(
                             search.lower() in data.get("name", "").lower()
                             or search.lower() in data.get("description", "").lower()
                         ):
-                            found.append({
-                                "name": data.get("name", plugin_dir.name),
-                                "version": data.get("version", "unknown"),
-                                "description": data.get("description", ""),
-                                "path": str(plugin_dir),
-                            })
+                            found.append(
+                                {
+                                    "name": data.get("name", plugin_dir.name),
+                                    "version": data.get("version", "unknown"),
+                                    "description": data.get("description", ""),
+                                    "path": str(plugin_dir),
+                                }
+                            )
                     except Exception:
                         pass
 
@@ -249,13 +250,17 @@ def plugins(
             table.add_column("Path", style="dim")
             for found_plugin in found:
                 table.add_row(
-                    found_plugin["name"], found_plugin["version"],
-                    found_plugin["description"][:50], found_plugin["path"],
+                    found_plugin["name"],
+                    found_plugin["version"],
+                    found_plugin["description"][:50],
+                    found_plugin["path"],
                 )
             console.print(table)
         else:
             console.print(f"[dim]No plugins found matching '{search}'[/dim]")
-            console.print("[dim]Searched in: ~/.config/spectre/plugins, /usr/share/spectre/plugins, /opt/spectre/plugins[/dim]")  # noqa: E501
+            console.print(
+                "[dim]Searched in: ~/.config/spectre/plugins, /usr/share/spectre/plugins, /opt/spectre/plugins[/dim]"
+            )  # noqa: E501
 
     elif install:
         from pathlib import Path
@@ -281,13 +286,17 @@ def plugins(
         loaded = loader.load_plugins()
         if loaded:
             loaded_plugin = loaded[0]
-            save_plugin_record(PluginRecord(
-                name=loaded_plugin.manifest.name,
-                version=loaded_plugin.manifest.version,
-                status="installed",
-                permissions=",".join(loaded_plugin.manifest.permissions),
-            ))
-            console.print(f"[green]Installed plugin: {loaded_plugin.manifest.name} v{loaded_plugin.manifest.version}[/green]")  # noqa: E501
+            save_plugin_record(
+                PluginRecord(
+                    name=loaded_plugin.manifest.name,
+                    version=loaded_plugin.manifest.version,
+                    status="installed",
+                    permissions=",".join(loaded_plugin.manifest.permissions),
+                )
+            )
+            console.print(
+                f"[green]Installed plugin: {loaded_plugin.manifest.name} v{loaded_plugin.manifest.version}[/green]"
+            )  # noqa: E501
         else:
             console.print("[red]Failed to load plugin[/red]")
             raise typer.Exit(1)
@@ -305,6 +314,7 @@ def plugins(
     else:
         # Show loaded plugins from memory
         from packages.memory.db import get_plugin_records
+
         records = get_plugin_records(limit=50)
 
         if list_plugins or not records:
@@ -401,7 +411,7 @@ def doctor(
             for name in engine.agents:
                 if not engine.resolve_agent(name):
                     agent = engine.agents[name]
-                    if hasattr(agent, 'initialize'):
+                    if hasattr(agent, "initialize"):
                         try:
                             agent.initialize()
                             fixed += 1
@@ -486,6 +496,7 @@ def status(
                 results = get_status()
                 if json_output:
                     import json
+
                     print(json.dumps(results, indent=2))
                 else:
                     console.clear()
@@ -497,6 +508,7 @@ def status(
         results = get_status()
         if json_output:
             import json
+
             print(json.dumps(results, indent=2))
         else:
             print_status(results)
@@ -631,6 +643,7 @@ def security(
                 if action == "selinux-audit" and "Permissive" in output:
                     try:
                         import subprocess
+
                         res = subprocess.run(["sudo", "setenforce", "1"], capture_output=True, text=True, timeout=5)
                         if res.returncode == 0:
                             console.print("  [green]✓ Set SELinux to Enforcing[/green]")
@@ -644,9 +657,12 @@ def security(
                 elif action == "firewall-audit" and "not active" in output.lower():
                     try:
                         import subprocess
+
                         res = subprocess.run(
                             ["sudo", "systemctl", "start", "firewalld"],
-                            capture_output=True, text=True, timeout=10,
+                            capture_output=True,
+                            text=True,
+                            timeout=10,
                         )
                         if res.returncode == 0:
                             console.print("  [green]✓ Started firewalld[/green]")
@@ -663,7 +679,9 @@ def security(
 
             console.print(f"\n[green]Fixed {fixed}/{len(issues)} issues[/green]")
         elif issues:
-            console.print(f"\n[yellow]Found {len(issues)} security issue(s). Run with --fix to attempt repairs.[/yellow]")  # noqa: E501
+            console.print(
+                f"\n[yellow]Found {len(issues)} security issue(s). Run with --fix to attempt repairs.[/yellow]"
+            )  # noqa: E501
     else:
         result = _run_agent_action("security", "selinux-audit")
         _print_result("selinux-audit", result)
@@ -747,6 +765,7 @@ def workflows(
 
     if load_dir:
         from pathlib import Path
+
         count = engine.load_workflows(Path(load_dir))
         console.print(f"[green]Loaded {count} custom workflows from {load_dir}[/green]")
         return
@@ -911,6 +930,7 @@ def config(
 
     if get_key:
         from packages.memory.db import get_configuration
+
         value = get_configuration(get_key, profile=settings.profile)
         if value is None:
             console.print(f"[yellow]Key '{get_key}' not found[/yellow]")
@@ -920,6 +940,7 @@ def config(
 
     if set_key and set_value:
         from packages.memory.db import Configuration, save_configuration
+
         save_configuration(Configuration(key=set_key, value=set_value, profile=settings.profile))
         console.print(f"[green]Set {set_key} = {set_value}[/green]")
         return
@@ -1009,7 +1030,8 @@ def daemon(
     if action == "status":
         result = subprocess.run(
             ["systemctl", "--user", "is-active", service_name],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         status = result.stdout.strip()
         if status == "active":
@@ -1022,7 +1044,8 @@ def daemon(
     elif action == "start":
         result = subprocess.run(
             ["systemctl", "--user", "start", service_name],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         if result.returncode == 0:
             console.print(f"[green]{service_name} started[/green]")
@@ -1033,7 +1056,8 @@ def daemon(
     elif action == "stop":
         result = subprocess.run(
             ["systemctl", "--user", "stop", service_name],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         if result.returncode == 0:
             console.print(f"[green]{service_name} stopped[/green]")
@@ -1082,6 +1106,7 @@ def init(
     sample_workflow = Path.home() / ".config" / "spectre" / "workflows" / "sample.yaml"
     if not sample_workflow.exists() or force:
         import yaml
+
         sample = {
             "name": "sample-workflow",
             "description": "A sample custom workflow",
@@ -1124,15 +1149,15 @@ def schedule(
 
     # Load scheduled tasks from config
     with Session(db_engine) as session:
-        config = session.exec(
-            select(Configuration).where(Configuration.key == "scheduled_tasks")
-        ).first()
+        config = session.exec(select(Configuration).where(Configuration.key == "scheduled_tasks")).first()
         if config:
             try:
                 tasks = json.loads(config.value)
                 for task_name, task_config in tasks.items():
+
                     def make_callback(wf: str) -> Callable[[], Any]:
                         return lambda: _get_engine().run_workflow(wf)
+
                     scheduler.add_task(task_name, task_config["schedule"], make_callback(task_config["workflow"]))
             except Exception:
                 pass
@@ -1157,12 +1182,14 @@ def schedule(
             from datetime import datetime
 
             last_run = (
-                "Never" if task.last_run is None
-                else datetime.fromtimestamp(task.last_run).strftime("%Y-%m-%d %H:%M")
+                "Never" if task.last_run is None else datetime.fromtimestamp(task.last_run).strftime("%Y-%m-%d %H:%M")
             )
             table.add_row(
-                task.name, task.schedule, getattr(task, 'workflow', '?'),
-                "Yes" if task.enabled else "No", last_run,
+                task.name,
+                task.schedule,
+                getattr(task, "workflow", "?"),
+                "Yes" if task.enabled else "No",
+                last_run,
             )
         console.print(table)
 
@@ -1178,9 +1205,7 @@ def schedule(
 
         # Save to config
         with Session(db_engine) as session:
-            config = session.exec(
-                select(Configuration).where(Configuration.key == "scheduled_tasks")
-            ).first()
+            config = session.exec(select(Configuration).where(Configuration.key == "scheduled_tasks")).first()
             tasks = json.loads(config.value) if config else {}
             tasks[name] = {"schedule": schedule_expr, "workflow": workflow, "enabled": True}
             if config:
@@ -1198,9 +1223,7 @@ def schedule(
             raise typer.Exit(1)
 
         with Session(db_engine) as session:
-            config = session.exec(
-                select(Configuration).where(Configuration.key == "scheduled_tasks")
-            ).first()
+            config = session.exec(select(Configuration).where(Configuration.key == "scheduled_tasks")).first()
             if config:
                 tasks = json.loads(config.value)
                 if name in tasks:
@@ -1221,9 +1244,7 @@ def schedule(
 
         # Find and run the task immediately
         with Session(db_engine) as session:
-            config = session.exec(
-                select(Configuration).where(Configuration.key == "scheduled_tasks")
-            ).first()
+            config = session.exec(select(Configuration).where(Configuration.key == "scheduled_tasks")).first()
             if config:
                 tasks = json.loads(config.value)
                 if name in tasks:
@@ -1342,24 +1363,41 @@ def export(
 
         rows = []
         for event in export_data.get("events", []):
-            rows.append({
-                "type": "event", "timestamp": event["timestamp"],
-                "key": event["event_type"], "value": event.get("source", ""),
-            })
+            rows.append(
+                {
+                    "type": "event",
+                    "timestamp": event["timestamp"],
+                    "key": event["event_type"],
+                    "value": event.get("source", ""),
+                }
+            )
         for report in export_data.get("reports", []):
-            rows.append({
-                "type": "report", "timestamp": report["timestamp"],
-                "key": report["type"], "value": report["content"][:100],
-            })
+            rows.append(
+                {
+                    "type": "report",
+                    "timestamp": report["timestamp"],
+                    "key": report["type"],
+                    "value": report["content"][:100],
+                }
+            )
         for run in export_data.get("workflows", []):
-            rows.append({
-                "type": "workflow", "timestamp": run["timestamp"],
-                "key": run["workflow"], "value": run["status"],
-            })
+            rows.append(
+                {
+                    "type": "workflow",
+                    "timestamp": run["timestamp"],
+                    "key": run["workflow"],
+                    "value": run["status"],
+                }
+            )
         for config in export_data.get("config", []):
-            rows.append({
-                "type": "config", "timestamp": "", "key": config["key"], "value": config["value"],
-            })
+            rows.append(
+                {
+                    "type": "config",
+                    "timestamp": "",
+                    "key": config["key"],
+                    "value": config["value"],
+                }
+            )
 
         if rows:
             with open(output_path, "w", newline="") as f:
@@ -1374,11 +1412,13 @@ def export(
             output_path = output_path.with_suffix(".json")
         output_path.write_text(json.dumps(export_data, indent=2))
         console.print(f"[green]Exported data to {output_path}[/green]")
-        n_events = len(export_data.get('events', []))
-        n_reports = len(export_data.get('reports', []))
-        n_workflows = len(export_data.get('workflows', []))
-        n_config = len(export_data.get('config', []))
-        console.print(f"[dim]Events: {n_events}, Reports: {n_reports}, Workflows: {n_workflows}, Config: {n_config}[/dim]")  # noqa: E501
+        n_events = len(export_data.get("events", []))
+        n_reports = len(export_data.get("reports", []))
+        n_workflows = len(export_data.get("workflows", []))
+        n_config = len(export_data.get("config", []))
+        console.print(
+            f"[dim]Events: {n_events}, Reports: {n_reports}, Workflows: {n_workflows}, Config: {n_config}[/dim]"
+        )  # noqa: E501
 
 
 # ── import ────────────────────────────────────────────────────────────────────
@@ -1418,12 +1458,14 @@ def import_data(
     if data_type in ("all", "events") and "events" in data:
         for event in data["events"]:
             try:
-                save_event(EventLog(
-                    event_type=event["event_type"],
-                    source=event.get("source", "import"),
-                    severity=event.get("severity", "info"),
-                    data_json=json.dumps(event.get("data", {})),
-                ))
+                save_event(
+                    EventLog(
+                        event_type=event["event_type"],
+                        source=event.get("source", "import"),
+                        severity=event.get("severity", "info"),
+                        data_json=json.dumps(event.get("data", {})),
+                    )
+                )
                 imported["events"] += 1
             except Exception:
                 pass
@@ -1431,11 +1473,13 @@ def import_data(
     if data_type in ("all", "reports") and "reports" in data:
         for report in data["reports"]:
             try:
-                save_report(Report(
-                    report_type=report.get("type", "unknown"),
-                    content=report.get("content", ""),
-                    format="json",
-                ))
+                save_report(
+                    Report(
+                        report_type=report.get("type", "unknown"),
+                        content=report.get("content", ""),
+                        format="json",
+                    )
+                )
                 imported["reports"] += 1
             except Exception:
                 pass
@@ -1444,18 +1488,23 @@ def import_data(
         for config in data["config"]:
             try:
                 from packages.memory.db import save_configuration
-                save_configuration(Configuration(
-                    key=config["key"],
-                    value=config["value"],
-                    profile=config.get("profile", "default"),
-                ))
+
+                save_configuration(
+                    Configuration(
+                        key=config["key"],
+                        value=config["value"],
+                        profile=config.get("profile", "default"),
+                    )
+                )
                 imported["config"] += 1
             except Exception:
                 pass
 
     total = sum(imported.values())
     console.print(f"[green]Imported {total} records from {input_file}[/green]")
-    console.print(f"[dim]Events: {imported['events']}, Reports: {imported['reports']}, Config: {imported['config']}[/dim]")  # noqa: E501
+    console.print(
+        f"[dim]Events: {imported['events']}, Reports: {imported['reports']}, Config: {imported['config']}[/dim]"
+    )  # noqa: E501
 
 
 # ── dashboard ─────────────────────────────────────────────────────────────────
