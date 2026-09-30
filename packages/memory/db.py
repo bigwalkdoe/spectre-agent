@@ -156,6 +156,84 @@ def save_security_incident(incident: SecurityIncident) -> None:
         session.commit()
 
 
+def get_security_incidents(
+    resolved: bool | None = None,
+    severity: str | None = None,
+    since: datetime | None = None,
+    limit: int = 100,
+) -> list[SecurityIncident]:
+    """Return recorded incidents, newest first.
+
+    SecurityIncident was write-only until this getter was added: every other
+    persisted model had a reader, so findings could be recorded but never
+    retrieved, counted or alerted on. `resolved=None` means "either", which is
+    what a caller counting current exposure wants; pass True or False to filter.
+    """
+    with Session(engine) as session:
+        statement = select(SecurityIncident).order_by(desc(SecurityIncident.timestamp))
+        if resolved is not None:
+            statement = statement.where(SecurityIncident.resolved == resolved)
+        if severity is not None:
+            statement = statement.where(SecurityIncident.severity == severity)
+        if since is not None:
+            statement = statement.where(SecurityIncident.timestamp >= since)
+        return list(session.exec(statement.limit(limit)).all())
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    """Re-attach UTC to a timestamp read back from SQLite.
+
+    SQLite has no timezone-aware datetime type, so every timestamp comes back
+    naive even though it was written as an aware UTC value. A monitoring consumer
+    that parses this and compares it with an aware `now()` gets
+    "can't subtract offset-naive and offset-aware datetimes", so the timezone is
+    restored here rather than left for every caller to rediscover.
+    """
+    if value is None:
+        return None
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def get_security_summary() -> dict[str, object]:
+    """Aggregate current security exposure for monitoring.
+
+    `last_scan_timestamp` is derived from recorded data, never from the moment
+    this function is called. It is the newest maintenance record for the security
+    agent, so a summary served from a stale database reports a stale scan rather
+    than claiming a scan just happened. Timestamps are returned as aware UTC
+    ISO-8601 strings for the same reason as `_as_utc`.
+    """
+    unresolved = get_security_incidents(resolved=False, limit=1000)
+    by_severity: dict[str, int] = {}
+    oldest: datetime | None = None
+    for incident in unresolved:
+        by_severity[incident.severity] = by_severity.get(incident.severity, 0) + 1
+        if oldest is None or incident.timestamp < oldest:
+            oldest = incident.timestamp
+
+    last_scan: datetime | None = None
+    with Session(engine) as session:
+        statement = (
+            select(MaintenanceRecord)
+            .where(MaintenanceRecord.agent == "security")
+            .order_by(desc(MaintenanceRecord.timestamp))
+            .limit(1)
+        )
+        record = session.exec(statement).first()
+        if record is not None:
+            last_scan = record.timestamp
+
+    oldest_utc = _as_utc(oldest)
+    last_scan_utc = _as_utc(last_scan)
+    return {
+        "unresolved_total": len(unresolved),
+        "unresolved_by_severity": by_severity,
+        "oldest_unresolved_timestamp": oldest_utc.isoformat() if oldest_utc else None,
+        "last_scan_timestamp": last_scan_utc.isoformat() if last_scan_utc else None,
+        "has_ever_scanned": last_scan is not None,
+    }
+
+
 def get_kv(key: str, default: str = "") -> str:
     with Session(engine) as session:
         obj = session.get(KVStore, key)

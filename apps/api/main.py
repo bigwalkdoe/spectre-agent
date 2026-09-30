@@ -22,6 +22,7 @@ from packages.memory.db import (
     get_configuration,
     get_decisions,
     get_reports,
+    get_security_summary,
     get_workflow_runs,
     init_db,
     save_configuration,
@@ -370,6 +371,23 @@ async def system_status(_: bool = Depends(verify_api_key)) -> dict[str, Any]:
 
 
 # ── Reports ───────────────────────────────────────────────────────────────────
+
+
+@app.get("/api/security/summary")
+async def security_summary(_: bool = Depends(verify_api_key)) -> dict[str, Any]:
+    """Current security exposure, for monitoring.
+
+    Read-only and derived entirely from recorded incidents and maintenance
+    records, so a consumer can distinguish "no findings" from "never scanned":
+    `has_ever_scanned` and `last_scan_timestamp` are both reported, and the
+    timestamp is when the security agent last ran, not the time of this request.
+
+    The monitoring suite polls this to publish real finding counts. An earlier
+    exporter emitted hardcoded zeros and a `security_last_scan_timestamp` set to
+    the current time on every run, which asserted that a scan had just completed
+    when none had.
+    """
+    return get_security_summary()
 
 
 @app.get("/api/reports")

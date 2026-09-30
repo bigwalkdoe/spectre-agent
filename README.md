@@ -62,7 +62,7 @@ spectre daemon start
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                        CLI / API                            │
-│  (30 commands, 24 endpoints, TUI dashboard, JSON output)   │
+│  (30 commands, 25 endpoints, TUI dashboard, JSON output)   │
 ├─────────────────────────────────────────────────────────────┤
 │                     WorkflowEngine                          │
 │    (ServiceBus resolution + EventBus event publishing)      │
@@ -242,6 +242,7 @@ and fails fast if it is absent; the systemd user unit reads it from
 | `/api/events` | GET | System events |
 | `/api/schedule` | GET/POST | Schedule management |
 | `/api/schedule/{name}` | DELETE | Remove schedule |
+| `/api/security/summary` | GET | Current security exposure (unresolved findings by severity, last scan time) |
 | `/api/reports` | GET | List reports |
 | `/api/reports/{report_id}` | GET | Get report |
 | `/api/config/{key}` | GET/PUT | Config management |

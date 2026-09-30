@@ -48,7 +48,7 @@ spectre/
 │   └── publishing_agent/        # Release management (git, pyproject)
 ├── apps/
 │   ├── cli/main.py              # 30 CLI commands
-│   ├── api/main.py              # FastAPI REST API (24 endpoints, API key auth)
+│   ├── api/main.py              # FastAPI REST API (25 endpoints, API key auth)
 │   └── daemon/main.py           # Kernel-based background daemon
 ├── config/                      # Configuration files
 ├── tests/                       # Test suite (317 tests, hermetic — no real system commands)
@@ -102,7 +102,7 @@ spectre/
 - `spectre import` — Import data from JSON
 - `spectre report` — Generate reports
 
-## API Endpoints (24 total)
+## API Endpoints (25 total)
 
 All endpoints require API key authentication via the `X-API-Key` header.
 `SPECTRE_API_KEY` is mandatory: with it unset the API returns `503` rather than
@@ -129,6 +129,7 @@ healthchecks must send the header.
 | `/api/events` | GET | System events |
 | `/api/schedule` | GET/POST | Schedule management |
 | `/api/schedule/{name}` | DELETE | Remove schedule |
+| `/api/security/summary` | GET | Current security exposure (unresolved findings by severity, last scan time) |
 | `/api/reports` | GET | List reports |
 | `/api/reports/{report_id}` | GET | Get report |
 | `/api/config/{key}` | GET/PUT | Config management |
