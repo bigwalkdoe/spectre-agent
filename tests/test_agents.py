@@ -581,6 +581,58 @@ def test_security_agent_audit_ssh() -> None:
     assert isinstance(output, str)
 
 
+def _sshd_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, main: str, includes: dict[str, str]):
+    """Point the ssh audit at a synthetic /etc/ssh tree."""
+    dropin = tmp_path / "sshd_config.d"
+    dropin.mkdir()
+    for name, body in includes.items():
+        (dropin / name).write_text(body, encoding="utf-8")
+    main_file = tmp_path / "sshd_config"
+    main_file.write_text(f"Include {dropin}/*.conf\n{main}", encoding="utf-8")
+
+    agent = SecurityAgent()
+    agent.initialize()
+    monkeypatch.setattr(agent, "SSHD_CONFIG", main_file)
+    monkeypatch.setattr(agent, "SSHD_INCLUDE_DIR", dropin)
+    return agent
+
+
+def test_audit_ssh_follows_include(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fedora keeps hardening in sshd_config.d; reading only the main file missed it."""
+    agent = _sshd_fixture(tmp_path, monkeypatch, "", {"50-permitroot.conf": "PermitRootLogin no\n"})
+    assert "securely disabled" in agent._audit_ssh()
+
+
+def test_audit_ssh_flags_missing_directive_as_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """With no directive sshd falls back to prohibit-password, which allows root keys."""
+    agent = _sshd_fixture(tmp_path, monkeypatch, "Port 22\n", {})
+    output = agent._audit_ssh()
+    assert "prohibit-password" in output
+    assert "allows root login" in output
+
+
+def test_audit_ssh_flags_match_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A Match override must not be reported as securely disabled."""
+    agent = _sshd_fixture(
+        tmp_path, monkeypatch, "PermitRootLogin no\n", {"60-m.conf": "Match User deploy\n PermitRootLogin yes\n"}
+    )
+    output = agent._audit_ssh()
+    assert "Match blocks override it" in output
+    assert "securely disabled" not in output
+
+
+def test_audit_ssh_keyword_is_case_insensitive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    agent = _sshd_fixture(tmp_path, monkeypatch, "permitrootlogin no\n", {})
+    assert "securely disabled" in agent._audit_ssh()
+
+
+def test_audit_ssh_treats_prohibit_password_as_root_login_possible(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent = _sshd_fixture(tmp_path, monkeypatch, "PermitRootLogin prohibit-password\n", {})
+    assert "allows root login" in agent._audit_ssh()
+
+
 # ── AIAgent ───────────────────────────────────────────────────────────────────
 
 

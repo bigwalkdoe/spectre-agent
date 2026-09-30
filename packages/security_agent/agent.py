@@ -3,6 +3,7 @@ import re
 import shutil
 import subprocess
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -261,30 +262,99 @@ class SecurityAgent(BaseAgent):
             return f"WARNING: Found potential secrets exposed in files: {', '.join(found_incidents)}."
         return f"Secrets scan of {scan_dir} complete. No exposed credentials or keys found."
 
-    def _audit_ssh(self) -> str:
-        ssh_config_file = Path("/etc/ssh/sshd_config")
-        if not ssh_config_file.is_file():
-            # Check user ssh config or fallback
-            return "System SSH config (/etc/ssh/sshd_config) not found. SSH audit skipped."
-        try:
-            content = ssh_config_file.read_text(errors="ignore")
-            # Check PermitRootLogin setting
-            root_login = True
-            for line in content.splitlines():
-                line = line.strip()
-                if line.startswith("PermitRootLogin") and "no" in line.lower():
-                    root_login = False
-                    break
+    SSHD_CONFIG = Path("/etc/ssh/sshd_config")
+    SSHD_INCLUDE_DIR = Path("/etc/ssh/sshd_config.d")
 
-            if root_login:
+    def _iter_sshd_directives(
+        self, path: Path, in_match: bool = False, seen: set[Path] | None = None
+    ) -> Iterator[tuple[str, str, bool]]:
+        """Yield `(keyword, value, in_match)` from an sshd config file.
+
+        Follows `Include` and tracks `Match`. Modern Fedora keeps most of the
+        real configuration in /etc/ssh/sshd_config.d, so reading only
+        sshd_config would call a stock box secure on the strength of a stale
+        top-level directive.
+        """
+        seen = set() if seen is None else seen
+        try:
+            resolved = path.resolve()
+        except OSError:
+            return
+        if resolved in seen:
+            return
+        seen.add(resolved)
+
+        try:
+            lines = path.read_text(errors="ignore").splitlines()
+        except OSError:
+            return
+
+        for raw in lines:
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split(None, 1)
+            keyword = parts[0].lower()
+            value = parts[1].strip() if len(parts) > 1 else ""
+
+            if keyword == "include":
+                for pattern in value.split():
+                    target = Path(pattern)
+                    if not target.is_absolute():
+                        target = self.SSHD_INCLUDE_DIR / pattern
+                    for included in sorted(target.parent.glob(target.name)):
+                        yield from self._iter_sshd_directives(included, in_match, seen)
+                continue
+            if keyword == "match":
+                in_match = True
+                continue
+            yield keyword, value, in_match
+
+    def _audit_ssh(self) -> str:
+        if not self.SSHD_CONFIG.is_file():
+            return f"System SSH config ({self.SSHD_CONFIG}) not found. SSH audit skipped."
+        try:
+            global_value: str | None = None
+            conditional: list[str] = []
+            for keyword, value, in_match in self._iter_sshd_directives(self.SSHD_CONFIG):
+                if keyword != "permitrootlogin":
+                    continue
+                if in_match:
+                    conditional.append(value)
+                elif global_value is None:
+                    global_value = value
+
+            effective = (global_value if global_value is not None else "prohibit-password").lower()
+
+            if effective != "no":
+                severity = "high" if effective == "yes" else "medium"
+                detail = f"SSH allows root login (PermitRootLogin {effective}). Recommend 'no'."
+                if conditional:
+                    detail += f" Match blocks also set: {', '.join(conditional)}."
+                save_security_incident(
+                    SecurityIncident(
+                        severity=severity,
+                        rule_id="SSH_ROOT_ALLOWED",
+                        message=detail,
+                    )
+                )
+                return detail
+
+            if conditional:
                 save_security_incident(
                     SecurityIncident(
                         severity="medium",
-                        rule_id="SSH_ROOT_ALLOWED",
-                        message="SSH allows root login. Consider changing PermitRootLogin to no.",
+                        rule_id="SSH_ROOT_MATCH_OVERRIDE",
+                        message=(
+                            "Global PermitRootLogin is 'no' but Match blocks set: "
+                            f"{', '.join(conditional)}. Review manually."
+                        ),
                     )
                 )
-                return "SSH configuration allows root login. Recommending PermitRootLogin=no."
+                return (
+                    "Global PermitRootLogin is 'no', but Match blocks override it: "
+                    f"{', '.join(conditional)}. Review manually."
+                )
             return "SSH configuration checked. PermitRootLogin is securely disabled."
         except Exception as e:
             return f"SSH configuration check failed (permission error?): {e}"

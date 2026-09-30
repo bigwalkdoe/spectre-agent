@@ -26,8 +26,12 @@ if [ -z "$PYTHON" ]; then
     exit 1
 fi
 
-PY_VERSION=$($PYTHON --version 2>&1 | grep -oP '\d+\.\d+')
-echo "Found Python $PY_VERSION at $(which $PYTHON)"
+# Parse the version for display only. sed (not grep -oP, which needs PCRE) and
+# `|| true` so a surprising --version format can never abort the installer
+# under `set -euo pipefail`.
+PY_VERSION=$("$PYTHON" --version 2>&1 | sed -nE 's/^Python ([0-9]+\.[0-9]+).*/\1/p' || true)
+PY_PATH=$(command -v "$PYTHON" || true)
+echo "Found Python ${PY_VERSION:-unknown} at ${PY_PATH:-$PYTHON}"
 
 # Check for required system tools
 echo ""
@@ -63,8 +67,10 @@ echo "Installing Spectre..."
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
+# Install the runtime only. Development extras (pytest, mypy, ruff, coverage)
+# belong to `make install`, not a workstation install.
 "$VENV_DIR/bin/pip" install --upgrade pip -q
-"$VENV_DIR/bin/pip" install -e "${PROJECT_DIR}[dev]" -q
+"$VENV_DIR/bin/pip" install -e "$PROJECT_DIR" -q
 
 # Create symlink
 SPECTRE_BIN="${VENV_DIR}/bin/spectre"
@@ -136,3 +142,9 @@ echo "  make run-daemon      # Or via Makefile"
 echo ""
 echo "API:"
 echo "  make run-api         # Start REST API on :8080"
+echo ""
+echo "The API requires SPECTRE_API_KEY and will not start without it:"
+echo "  export SPECTRE_API_KEY=\"\$(openssl rand -hex 32)\""
+echo ""
+echo "For a development environment (adds pytest, mypy, ruff, coverage):"
+echo "  make install"

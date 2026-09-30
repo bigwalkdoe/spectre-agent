@@ -51,7 +51,7 @@ spectre/
 │   ├── api/main.py              # FastAPI REST API (24 endpoints, API key auth)
 │   └── daemon/main.py           # Kernel-based background daemon
 ├── config/                      # Configuration files
-├── tests/                       # Test suite (312 tests, hermetic — no real system commands)
+├── tests/                       # Test suite (317 tests, hermetic — no real system commands)
 ├── docs/                        # Documentation
 └── scripts/                     # Installation and utilities
 ```
