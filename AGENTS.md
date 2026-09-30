@@ -47,7 +47,7 @@ spectre/
 │   ├── documentation_agent/     # Documentation (file system ops)
 │   └── publishing_agent/        # Release management (git, pyproject)
 ├── apps/
-│   ├── cli/main.py              # 31 CLI commands
+│   ├── cli/main.py              # 30 CLI commands
 │   ├── api/main.py              # FastAPI REST API (24 endpoints, API key auth)
 │   └── daemon/main.py           # Kernel-based background daemon
 ├── config/                      # Configuration files
@@ -106,6 +106,7 @@ spectre/
 
 All endpoints require API key authentication via the `X-API-Key` header.
 `SPECTRE_API_KEY` is mandatory: with it unset the API returns `503` rather than
+| `/` | GET | Dashboard HTML (API key required) |
 serving unauthenticated. `/api/health` is authenticated too, so container
 healthchecks must send the header.
 
@@ -114,7 +115,7 @@ healthchecks must send the header.
 | `/api/health` | GET | Health check |
 | `/api/version` | GET | Version info |
 | `/api/agents` | GET | List agents |
-| `/api/agents/{name}` | GET | Agent status |
+| `/api/agents/{agent_name}` | GET | Agent status |
 | `/api/workflows` | GET | List workflows |
 | `/api/workflows/{name}` | POST | Run workflow |
 | `/api/workflows/history` | GET | Workflow history |
@@ -129,7 +130,7 @@ healthchecks must send the header.
 | `/api/schedule` | GET/POST | Schedule management |
 | `/api/schedule/{name}` | DELETE | Remove schedule |
 | `/api/reports` | GET | List reports |
-| `/api/reports/{id}` | GET | Get report |
+| `/api/reports/{report_id}` | GET | Get report |
 | `/api/config/{key}` | GET/PUT | Config management |
 | `/api/decisions` | GET | List decisions |
 

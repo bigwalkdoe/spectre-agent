@@ -30,6 +30,13 @@ jobs:
         run: ruff format --check packages apps tests
       - name: Mypy type check
         run: mypy packages apps --ignore-missing-imports
+      - name: API docs match the code
+        # Both AGENTS.md and README.md publish an endpoint table and an exact CLI
+        # command count. Nothing checked them: the tables were missing `GET /`
+        # and named two path parameters differently from the routes, and the
+        # count was off by one.
+        run: python scripts/check-api-docs.py
+
       - name: Dashboard JavaScript syntax
         # DASHBOARD_HTML is a Python string literal that ships to the browser.
         # A `# noqa: E501` once sat inside it; `#` is not a JS comment, so the
