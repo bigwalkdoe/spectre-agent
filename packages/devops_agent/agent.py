@@ -1,3 +1,4 @@
+import logging
 import shutil
 import subprocess
 import time
@@ -5,6 +6,13 @@ from typing import Any
 
 from packages.core.agent import BaseAgent
 from packages.memory.db import MaintenanceRecord, save_maintenance_record
+
+logger = logging.getLogger(__name__)
+
+# Hard timeouts so a stalled container engine can never wedge the CLI, daemon,
+# or API. Status reads are cheap; prunes may legitimately run for a while.
+STATUS_TIMEOUT = 10
+PRUNE_TIMEOUT = 120
 
 
 class DevOpsAgent(BaseAgent):
@@ -138,8 +146,27 @@ class DevOpsAgent(BaseAgent):
         pass
 
     # Subprocess execution helpers
+    def _run(self, cmd: list[str], timeout: int) -> subprocess.CompletedProcess[str] | None:
+        """Run a container-tool command with a hard timeout.
+
+        Returns None when the binary is missing, the engine is unreachable, or
+        the command exceeds `timeout` seconds, so callers can degrade gracefully
+        instead of blocking the CLI/daemon/API indefinitely.
+        """
+        try:
+            return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            logger.warning("%s timed out after %ds", cmd[0], timeout)
+        except FileNotFoundError:
+            logger.debug("%s not installed", cmd[0])
+        except Exception as e:
+            logger.warning("%s failed: %s", cmd[0], e)
+        return None
+
     def _run_podman_status(self) -> str:
-        res = subprocess.run(["podman", "ps", "--all", "--format", "{{.Names}}"], capture_output=True, text=True)
+        res = self._run(["podman", "ps", "--all", "--format", "{{.Names}}"], timeout=STATUS_TIMEOUT)
+        if res is None:
+            return "Podman status unavailable (engine unreachable or timed out)."
         containers = [line.strip() for line in res.stdout.splitlines() if line.strip()]
         if containers:
             return f"Found Podman containers: {', '.join(containers)}."
@@ -147,28 +174,36 @@ class DevOpsAgent(BaseAgent):
 
     def _run_podman_prune(self) -> str:
         # Prune stopped containers and unused images
-        res = subprocess.run(["podman", "system", "prune", "-f"], capture_output=True, text=True)
+        res = self._run(["podman", "system", "prune", "-f"], timeout=PRUNE_TIMEOUT)
+        if res is None:
+            return "Podman prune did not complete (engine unreachable or timed out)."
         return res.stdout.strip() or "Podman system prune finished."
 
     def _run_docker_status(self) -> str:
-        res = subprocess.run(["docker", "ps", "--all", "--format", "{{.Names}}"], capture_output=True, text=True)
+        res = self._run(["docker", "ps", "--all", "--format", "{{.Names}}"], timeout=STATUS_TIMEOUT)
+        if res is None:
+            return "Docker status unavailable (daemon unreachable or timed out)."
         containers = [line.strip() for line in res.stdout.splitlines() if line.strip()]
         if containers:
             return f"Found Docker containers: {', '.join(containers)}."
         return "No Docker containers found."
 
     def _run_docker_prune(self) -> str:
-        res = subprocess.run(["docker", "system", "prune", "-f"], capture_output=True, text=True)
+        res = self._run(["docker", "system", "prune", "-f"], timeout=PRUNE_TIMEOUT)
+        if res is None:
+            return "Docker prune did not complete (daemon unreachable or timed out)."
         return res.stdout.strip() or "Docker system prune finished."
 
     def _run_kubectl_status(self) -> str:
         # Check current context and connection to the cluster
-        res_ctx = subprocess.run(["kubectl", "config", "current-context"], capture_output=True, text=True)
-        ctx = res_ctx.stdout.strip()
+        res_ctx = self._run(["kubectl", "config", "current-context"], timeout=STATUS_TIMEOUT)
+        ctx = res_ctx.stdout.strip() if res_ctx is not None else ""
         if not ctx:
             return "No Kubernetes context configured."
         # Try checking nodes (with short timeout to fail fast if cluster is offline)
-        res_nodes = subprocess.run(["kubectl", "get", "nodes", "--request-timeout=5"], capture_output=True, text=True)
+        res_nodes = self._run(["kubectl", "get", "nodes", "--request-timeout=5"], timeout=STATUS_TIMEOUT * 2)
+        if res_nodes is None:
+            return f"Kubernetes context configured to '{ctx}', but cluster is unreachable."
         if res_nodes.returncode == 0:
             return f"Connected to Kubernetes context: '{ctx}'. Cluster is responsive."
         return f"Kubernetes context configured to '{ctx}', but cluster is unreachable."

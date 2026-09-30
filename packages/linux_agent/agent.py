@@ -188,8 +188,9 @@ class LinuxAgent(BaseAgent):
 
     def _run_flatpak_prune(self) -> str:
         try:
-            # We dry-run or attempt to uninstall unused flatpaks.
-            # Note: without root it might fail or target user flatpaks. Let's do --user cleanup.
+            # Destructive: actually uninstalls unused *user* runtimes (-y skips the
+            # prompt). Scoped to --user so it never needs root. Use
+            # `flatpak uninstall --unused --user --assumeno` to preview first.
             res = subprocess.run(
                 ["flatpak", "uninstall", "--unused", "--user", "-y"],
                 capture_output=True,

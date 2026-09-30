@@ -13,7 +13,7 @@ Spectre monitors, maintains, secures, and manages your Linux workstation through
 ## Features
 
 - **8 Intelligent Agents** — Real system integration with psutil, subprocess, and API calls
-- **31 CLI Commands** — Complete control from the terminal
+- **30 CLI Commands** — Complete control from the terminal
 - **24 REST API Endpoints** — Programmatic access with API key authentication
 - **Enterprise TUI** — Interactive Textual dashboard with real-time metrics
 - **Custom Workflows** — Load and execute YAML/JSON workflows at runtime
@@ -62,7 +62,7 @@ spectre daemon start
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                        CLI / API                            │
-│  (31 commands, 24 endpoints, TUI dashboard, JSON output)   │
+│  (30 commands, 25 endpoints, TUI dashboard, JSON output)   │
 ├─────────────────────────────────────────────────────────────┤
 │                     WorkflowEngine                          │
 │    (ServiceBus resolution + EventBus event publishing)      │
@@ -200,12 +200,26 @@ spectre workflows my-workflow
 
 ### Authentication
 
-Set `SPECTRE_API_KEY` environment variable to enable API key authentication:
+**`SPECTRE_API_KEY` is required.** The API refuses to serve when it is unset —
+| `/` | GET | Dashboard HTML (API key required) |
+every endpoint, including `/api/health`, `/api/version`, `/api/system/status`
+and the dashboard, returns `503`. This is deliberate: the API can run workflows,
+write config and prune containers, so it must never fall back to open.
 
 ```bash
-export SPECTRE_API_KEY="your-secret-key"
-curl -H "X-API-Key: your-secret-key" http://localhost:8000/api/agents
+export SPECTRE_API_KEY="$(openssl rand -hex 32)"
+curl -H "X-API-Key: $SPECTRE_API_KEY" http://localhost:8000/api/agents
 ```
+
+Keys are compared in constant time. `docker-compose.yml` requires the variable
+and fails fast if it is absent; the systemd user unit reads it from
+`~/.config/spectre/spectre.env` (mode `0600`).
+
+### Custom workflow loading
+
+`POST /api/workflows/load` only accepts directories inside
+`~/.config/spectre/workflows`. Widen with `SPECTRE_WORKFLOW_ROOTS`
+(`:`-separated) — a request for any other directory is rejected with `400`.
 
 ### Endpoints
 
@@ -214,7 +228,7 @@ curl -H "X-API-Key: your-secret-key" http://localhost:8000/api/agents
 | `/api/health` | GET | Health check |
 | `/api/version` | GET | Version info |
 | `/api/agents` | GET | List agents |
-| `/api/agents/{name}` | GET | Agent status |
+| `/api/agents/{agent_name}` | GET | Agent status |
 | `/api/workflows` | GET | List workflows |
 | `/api/workflows/{name}` | POST | Run workflow |
 | `/api/workflows/history` | GET | Workflow history |
@@ -228,8 +242,9 @@ curl -H "X-API-Key: your-secret-key" http://localhost:8000/api/agents
 | `/api/events` | GET | System events |
 | `/api/schedule` | GET/POST | Schedule management |
 | `/api/schedule/{name}` | DELETE | Remove schedule |
+| `/api/security/summary` | GET | Current security exposure (unresolved findings by severity, last scan time) |
 | `/api/reports` | GET | List reports |
-| `/api/reports/{id}` | GET | Get report |
+| `/api/reports/{report_id}` | GET | Get report |
 | `/api/config/{key}` | GET/PUT | Config management |
 | `/api/decisions` | GET | List decisions |
 

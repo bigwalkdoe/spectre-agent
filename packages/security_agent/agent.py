@@ -1,7 +1,9 @@
+import os
 import re
 import shutil
 import subprocess
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -200,9 +202,28 @@ class SecurityAgent(BaseAgent):
         except Exception as e:
             return f"Ports audit failed: {e}"
 
+    # Suffixes worth scanning for credentials.
+    SCAN_SUFFIXES = (".py", ".toml", ".json", ".yaml", ".yml", ".ini", ".cfg", ".conf", ".sh", ".env")
+
+    def _is_scannable(self, path: Path) -> bool:
+        """Whether a file is worth reading during the secrets scan.
+
+        A suffix allowlist alone is not enough: pathlib reports an empty suffix
+        for `.env`, so the most likely home for a committed secret was skipped
+        entirely. Match those dotfiles by name as well.
+        """
+        name = path.name
+        if name == ".env" or name.startswith(".env."):
+            return True
+        return path.suffix in self.SCAN_SUFFIXES
+
     def _scan_secrets(self) -> str:
-        # Scan for private keys, oauth tokens, or passwords in .env, settings, or configs
-        scan_dir = Path(".")
+        # Scan for private keys, oauth tokens, or passwords in .env, settings, or configs.
+        # Pin the root to an absolute path so the result describes a known tree
+        # instead of whatever CWD the daemon happened to inherit.
+        scan_dir = Path(os.environ.get("SPECTRE_SCAN_ROOT", ".")).expanduser().resolve()
+        if not scan_dir.is_dir():
+            return f"Secrets scan skipped: {scan_dir} is not a directory."
         secret_patterns = {
             "private_key": re.compile(r"-----BEGIN [A-Z]+ PRIVATE KEY-----"),
             "generic_secret": re.compile(
@@ -218,7 +239,7 @@ class SecurityAgent(BaseAgent):
             for path in scan_dir.rglob("*"):
                 if any(part in ignore_dirs for part in path.parts):
                     continue
-                if path.is_file() and path.suffix in (".py", ".env", ".toml", ".json", ".yaml", ".yml"):
+                if path.is_file() and self._is_scannable(path):
                     try:
                         content = path.read_text(encoding="utf-8", errors="ignore")
                         for name, pattern in secret_patterns.items():
@@ -235,36 +256,105 @@ class SecurityAgent(BaseAgent):
                     except Exception:
                         pass
         except Exception as e:
-            return f"Secrets scan failed during traversal: {e}"
+            return f"Secrets scan of {scan_dir} failed during traversal: {e}"
 
         if found_incidents:
             return f"WARNING: Found potential secrets exposed in files: {', '.join(found_incidents)}."
-        return "Secrets scan complete. No exposed credentials or keys found in local files."
+        return f"Secrets scan of {scan_dir} complete. No exposed credentials or keys found."
+
+    SSHD_CONFIG = Path("/etc/ssh/sshd_config")
+    SSHD_INCLUDE_DIR = Path("/etc/ssh/sshd_config.d")
+
+    def _iter_sshd_directives(
+        self, path: Path, in_match: bool = False, seen: set[Path] | None = None
+    ) -> Iterator[tuple[str, str, bool]]:
+        """Yield `(keyword, value, in_match)` from an sshd config file.
+
+        Follows `Include` and tracks `Match`. Modern Fedora keeps most of the
+        real configuration in /etc/ssh/sshd_config.d, so reading only
+        sshd_config would call a stock box secure on the strength of a stale
+        top-level directive.
+        """
+        seen = set() if seen is None else seen
+        try:
+            resolved = path.resolve()
+        except OSError:
+            return
+        if resolved in seen:
+            return
+        seen.add(resolved)
+
+        try:
+            lines = path.read_text(errors="ignore").splitlines()
+        except OSError:
+            return
+
+        for raw in lines:
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split(None, 1)
+            keyword = parts[0].lower()
+            value = parts[1].strip() if len(parts) > 1 else ""
+
+            if keyword == "include":
+                for pattern in value.split():
+                    target = Path(pattern)
+                    if not target.is_absolute():
+                        target = self.SSHD_INCLUDE_DIR / pattern
+                    for included in sorted(target.parent.glob(target.name)):
+                        yield from self._iter_sshd_directives(included, in_match, seen)
+                continue
+            if keyword == "match":
+                in_match = True
+                continue
+            yield keyword, value, in_match
 
     def _audit_ssh(self) -> str:
-        ssh_config_file = Path("/etc/ssh/sshd_config")
-        if not ssh_config_file.is_file():
-            # Check user ssh config or fallback
-            return "System SSH config (/etc/ssh/sshd_config) not found. SSH audit skipped."
+        if not self.SSHD_CONFIG.is_file():
+            return f"System SSH config ({self.SSHD_CONFIG}) not found. SSH audit skipped."
         try:
-            content = ssh_config_file.read_text(errors="ignore")
-            # Check PermitRootLogin setting
-            root_login = True
-            for line in content.splitlines():
-                line = line.strip()
-                if line.startswith("PermitRootLogin") and "no" in line.lower():
-                    root_login = False
-                    break
+            global_value: str | None = None
+            conditional: list[str] = []
+            for keyword, value, in_match in self._iter_sshd_directives(self.SSHD_CONFIG):
+                if keyword != "permitrootlogin":
+                    continue
+                if in_match:
+                    conditional.append(value)
+                elif global_value is None:
+                    global_value = value
 
-            if root_login:
+            effective = (global_value if global_value is not None else "prohibit-password").lower()
+
+            if effective != "no":
+                severity = "high" if effective == "yes" else "medium"
+                detail = f"SSH allows root login (PermitRootLogin {effective}). Recommend 'no'."
+                if conditional:
+                    detail += f" Match blocks also set: {', '.join(conditional)}."
+                save_security_incident(
+                    SecurityIncident(
+                        severity=severity,
+                        rule_id="SSH_ROOT_ALLOWED",
+                        message=detail,
+                    )
+                )
+                return detail
+
+            if conditional:
                 save_security_incident(
                     SecurityIncident(
                         severity="medium",
-                        rule_id="SSH_ROOT_ALLOWED",
-                        message="SSH allows root login. Consider changing PermitRootLogin to no.",
+                        rule_id="SSH_ROOT_MATCH_OVERRIDE",
+                        message=(
+                            "Global PermitRootLogin is 'no' but Match blocks set: "
+                            f"{', '.join(conditional)}. Review manually."
+                        ),
                     )
                 )
-                return "SSH configuration allows root login. Recommending PermitRootLogin=no."
+                return (
+                    "Global PermitRootLogin is 'no', but Match blocks override it: "
+                    f"{', '.join(conditional)}. Review manually."
+                )
             return "SSH configuration checked. PermitRootLogin is securely disabled."
         except Exception as e:
             return f"SSH configuration check failed (permission error?): {e}"

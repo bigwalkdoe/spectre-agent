@@ -1,10 +1,11 @@
 name: CI/CD Pipeline
 
 on:
+  # Lint/test/build ran only against main, so nothing on a feature branch was
+  # ever verified before merge -- including the dashboard JavaScript syntax
+  # check. Run them on every branch push; the release trigger is unchanged.
   push:
-    branches: [main]
   pull_request:
-    branches: [main]
   release:
     types: [published]
 
@@ -29,6 +30,31 @@ jobs:
         run: ruff format --check packages apps tests
       - name: Mypy type check
         run: mypy packages apps --ignore-missing-imports
+      - name: API docs match the code
+        # Both AGENTS.md and README.md publish an endpoint table and an exact CLI
+        # command count. Nothing checked them: the tables were missing `GET /`
+        # and named two path parameters differently from the routes, and the
+        # count was off by one.
+        run: python scripts/check-api-docs.py
+
+      - name: Dashboard JavaScript syntax
+        # DASHBOARD_HTML is a Python string literal that ships to the browser.
+        # A `# noqa: E501` once sat inside it; `#` is not a JS comment, so the
+        # whole script block became a SyntaxError and the dashboard rendered
+        # "Loading..." forever. Ruff cannot see inside the string, so parse the
+        # extracted script instead.
+        run: |
+          python - <<'PY' > /tmp/dashboard.js
+          import re
+          src = open("apps/api/main.py", encoding="utf-8").read()
+          html = re.search(r'DASHBOARD_HTML = """(.*?)"""', src, re.S).group(1)
+          script = re.search(r"<script>(.*?)</script>", html, re.S)
+          if not script:
+              raise SystemExit("no <script> block found in DASHBOARD_HTML")
+          print(script.group(1))
+          PY
+          node --check /tmp/dashboard.js
+          echo "dashboard JS parses"
 
   test:
     name: Tests (${{ matrix.python-version }})

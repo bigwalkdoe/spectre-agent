@@ -13,8 +13,11 @@ services:
     environment:
       - SPECTRE_PROFILE=production
       - SPECTRE_LOG_LEVEL=INFO
+      # Required. The API refuses to serve unauthenticated; fail fast at up
+      # rather than starting an open control surface on the published port.
+      - SPECTRE_API_KEY=${SPECTRE_API_KEY:?set SPECTRE_API_KEY in your environment or .env}
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      test: ["CMD-SHELL", "curl -fsS -H \"X-API-Key: $$SPECTRE_API_KEY\" http://localhost:8000/api/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3

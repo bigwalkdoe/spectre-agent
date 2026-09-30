@@ -47,11 +47,11 @@ spectre/
 │   ├── documentation_agent/     # Documentation (file system ops)
 │   └── publishing_agent/        # Release management (git, pyproject)
 ├── apps/
-│   ├── cli/main.py              # 31 CLI commands
-│   ├── api/main.py              # FastAPI REST API (24 endpoints, API key auth)
+│   ├── cli/main.py              # 30 CLI commands
+│   ├── api/main.py              # FastAPI REST API (25 endpoints, API key auth)
 │   └── daemon/main.py           # Kernel-based background daemon
 ├── config/                      # Configuration files
-├── tests/                       # Test suite (189 tests)
+├── tests/                       # Test suite (317 tests, hermetic — no real system commands)
 ├── docs/                        # Documentation
 └── scripts/                     # Installation and utilities
 ```
@@ -102,16 +102,20 @@ spectre/
 - `spectre import` — Import data from JSON
 - `spectre report` — Generate reports
 
-## API Endpoints (24 total)
+## API Endpoints (25 total)
 
-All endpoints support API key authentication via `X-API-Key` header.
+All endpoints require API key authentication via the `X-API-Key` header.
+`SPECTRE_API_KEY` is mandatory: with it unset the API returns `503` rather than
+| `/` | GET | Dashboard HTML (API key required) |
+serving unauthenticated. `/api/health` is authenticated too, so container
+healthchecks must send the header.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/health` | GET | Health check |
 | `/api/version` | GET | Version info |
 | `/api/agents` | GET | List agents |
-| `/api/agents/{name}` | GET | Agent status |
+| `/api/agents/{agent_name}` | GET | Agent status |
 | `/api/workflows` | GET | List workflows |
 | `/api/workflows/{name}` | POST | Run workflow |
 | `/api/workflows/history` | GET | Workflow history |
@@ -125,8 +129,9 @@ All endpoints support API key authentication via `X-API-Key` header.
 | `/api/events` | GET | System events |
 | `/api/schedule` | GET/POST | Schedule management |
 | `/api/schedule/{name}` | DELETE | Remove schedule |
+| `/api/security/summary` | GET | Current security exposure (unresolved findings by severity, last scan time) |
 | `/api/reports` | GET | List reports |
-| `/api/reports/{id}` | GET | Get report |
+| `/api/reports/{report_id}` | GET | Get report |
 | `/api/config/{key}` | GET/PUT | Config management |
 | `/api/decisions` | GET | List decisions |
 
