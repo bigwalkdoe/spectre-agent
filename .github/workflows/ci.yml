@@ -1,10 +1,11 @@
 name: CI/CD Pipeline
 
 on:
+  # Lint/test/build ran only against main, so nothing on a feature branch was
+  # ever verified before merge -- including the dashboard JavaScript syntax
+  # check. Run them on every branch push; the release trigger is unchanged.
   push:
-    branches: [main]
   pull_request:
-    branches: [main]
   release:
     types: [published]
 
