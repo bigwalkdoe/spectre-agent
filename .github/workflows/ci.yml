@@ -29,6 +29,24 @@ jobs:
         run: ruff format --check packages apps tests
       - name: Mypy type check
         run: mypy packages apps --ignore-missing-imports
+      - name: Dashboard JavaScript syntax
+        # DASHBOARD_HTML is a Python string literal that ships to the browser.
+        # A `# noqa: E501` once sat inside it; `#` is not a JS comment, so the
+        # whole script block became a SyntaxError and the dashboard rendered
+        # "Loading..." forever. Ruff cannot see inside the string, so parse the
+        # extracted script instead.
+        run: |
+          python - <<'PY' > /tmp/dashboard.js
+          import re
+          src = open("apps/api/main.py", encoding="utf-8").read()
+          html = re.search(r'DASHBOARD_HTML = """(.*?)"""', src, re.S).group(1)
+          script = re.search(r"<script>(.*?)</script>", html, re.S)
+          if not script:
+              raise SystemExit("no <script> block found in DASHBOARD_HTML")
+          print(script.group(1))
+          PY
+          node --check /tmp/dashboard.js
+          echo "dashboard JS parses"
 
   test:
     name: Tests (${{ matrix.python-version }})
