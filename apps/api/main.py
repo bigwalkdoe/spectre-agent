@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Security
@@ -31,17 +33,51 @@ kernel: Kernel | None = None
 service_bus: ServiceBus | None = None
 
 # API Key authentication
-API_KEY = os.environ.get("SPECTRE_API_KEY", "")
 API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+# Roots that POST /api/workflows/load may read definitions from. Callers cannot
+# widen this at request time; override with SPECTRE_WORKFLOW_ROOTS (os.pathsep).
+DEFAULT_WORKFLOW_ROOTS = (Path.home() / ".config" / "spectre" / "workflows",)
+
+
+def _configured_api_key() -> str:
+    """Read the API key at request time so it can be set or rotated without a restart."""
+    return os.environ.get("SPECTRE_API_KEY", "").strip()
+
+
+def _allowed_workflow_roots() -> list[Path]:
+    raw = os.environ.get("SPECTRE_WORKFLOW_ROOTS", "").strip()
+    if not raw:
+        return [p.resolve() for p in DEFAULT_WORKFLOW_ROOTS]
+    return [Path(p).expanduser().resolve() for p in raw.split(os.pathsep) if p.strip()]
+
+
+def _resolve_workflow_dir(directory: str) -> Path:
+    """Resolve `directory` and confirm it sits inside an allowed workflow root."""
+    candidate = Path(directory).expanduser().resolve()
+    for root in _allowed_workflow_roots():
+        if candidate == root or root in candidate.parents:
+            return candidate
+    allowed = ", ".join(str(p) for p in _allowed_workflow_roots())
+    raise HTTPException(400, f"Directory must be inside an allowed workflow root ({allowed})")
 
 
 async def verify_api_key(api_key: str | None = Security(API_KEY_HEADER)) -> bool:
-    """Verify API key if configured."""
-    if not API_KEY:
-        return True  # No API key configured, allow all
-    if api_key == API_KEY:
-        return True
-    raise HTTPException(status_code=401, detail="Invalid API key")
+    """Require a valid X-API-Key on every request.
+
+    Fails closed: an unset SPECTRE_API_KEY is a misconfiguration, not a licence to
+    serve the API unauthenticated. Without this the API would expose workflow
+    execution, config writes and scheduling to anyone who can reach the port.
+    """
+    expected = _configured_api_key()
+    if not expected:
+        raise HTTPException(
+            status_code=503,
+            detail="SPECTRE_API_KEY is not set; refusing to serve the API unauthenticated.",
+        )
+    if not api_key or not secrets.compare_digest(api_key.encode("utf-8"), expected.encode("utf-8")):
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    return True
 
 
 def _get_engine() -> WorkflowEngine:
@@ -108,6 +144,22 @@ async def list_workflows(_: bool = Depends(verify_api_key)) -> dict[str, list[st
     return {"workflows": eng.get_available_workflows()}
 
 
+@app.post("/api/workflows/load")
+async def load_workflows(directory: str, _: bool = Depends(verify_api_key)) -> dict[str, Any]:
+    """Load custom workflows from a directory inside an allowed workflow root.
+
+    Declared before `/api/workflows/{name}`: FastAPI matches in declaration
+    order, so a literal path placed after a path parameter is unreachable.
+    """
+    eng = _get_engine()
+    resolved = _resolve_workflow_dir(directory)
+    try:
+        count = eng.load_workflows(resolved)
+        return {"loaded": count, "directory": str(resolved)}
+    except Exception as e:
+        raise HTTPException(400, str(e)) from e
+
+
 @app.post("/api/workflows/{name}")
 async def run_workflow(name: str, _: bool = Depends(verify_api_key)) -> dict[str, Any]:
     """Execute a workflow by name."""
@@ -151,30 +203,17 @@ async def workflow_definitions(_: bool = Depends(verify_api_key)) -> dict[str, A
     }
 
 
-@app.post("/api/workflows/load")
-async def load_workflows(directory: str, _: bool = Depends(verify_api_key)) -> dict[str, Any]:
-    """Load custom workflows from a directory."""
-    from pathlib import Path
-
-    eng = _get_engine()
-    try:
-        count = eng.load_workflows(Path(directory))
-        return {"loaded": count, "directory": directory}
-    except Exception as e:
-        raise HTTPException(400, str(e)) from e
-
-
 # ── System ────────────────────────────────────────────────────────────────────
 
 
 @app.get("/api/health")
-async def health_check() -> dict[str, str]:
+async def health_check(_: bool = Depends(verify_api_key)) -> dict[str, str]:
     """API health check."""
     return {"status": "ok"}
 
 
 @app.get("/api/version")
-async def get_version() -> dict[str, str]:
+async def get_version(_: bool = Depends(verify_api_key)) -> dict[str, str]:
     """Get Spectre version."""
     from importlib.metadata import PackageNotFoundError
     from importlib.metadata import version as get_version
@@ -318,7 +357,7 @@ async def remove_schedule(name: str, _: bool = Depends(verify_api_key)) -> dict[
 
 
 @app.get("/api/system/status")
-async def system_status() -> dict[str, Any]:
+async def system_status(_: bool = Depends(verify_api_key)) -> dict[str, Any]:
     """Get system status from all agents."""
     eng = _get_engine()
     statuses: dict[str, Any] = {}
@@ -420,7 +459,7 @@ async def list_decisions(limit: int = 50, _: bool = Depends(verify_api_key)) -> 
 
 
 @app.get("/", response_class=HTMLResponse)
-async def dashboard() -> str:
+async def dashboard(_: bool = Depends(verify_api_key)) -> str:
     """Serve the web dashboard."""
     return DASHBOARD_HTML
 
@@ -482,9 +521,29 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
 
     <script>
+        const KEY_STORE = 'spectre_api_key';
+
+        function apiKey() {
+            let key = sessionStorage.getItem(KEY_STORE);
+            if (!key) {
+                key = window.prompt('Spectre API key (X-API-Key):');
+                if (!key) { return null; }
+                sessionStorage.setItem(KEY_STORE, key);
+            }
+            return key;
+        }
+
+        function apiFetch(path, options) {
+            const key = apiKey();
+            if (!key) { return Promise.reject(new Error('No API key')); }
+            const opts = Object.assign({}, options || {});
+            opts.headers = Object.assign({'X-API-Key': key}, opts.headers || {});
+            return fetch(path, opts);
+        }
+
         async function loadStatus() {
             try {
-                const res = await fetch('/api/system/status');
+                const res = await apiFetch('/api/system/status');
                 const data = await res.json();
                 const list = document.getElementById('status-list');
                 list.innerHTML = '';
@@ -494,26 +553,28 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                     list.appendChild(li);
                 }
             } catch(e) {
-                document.getElementById('status-list').innerHTML = '<li>Error loading status</li>';  # noqa: E501
+                const list = document.getElementById('status-list');
+                list.innerHTML = '<li>Error loading status</li>';
             }
         }
 
         async function loadAgents() {
             try {
-                const res = await fetch('/api/agents');
+                const res = await apiFetch('/api/agents');
                 const data = await res.json();
                 const spanStyle = 'display:inline-block;background:#30363d;'
                     + 'padding:4px 10px;border-radius:12px;margin:2px;font-size:13px;';
                 const agentsHtml = data.agents.map(a => `<span style="${spanStyle}">${a}</span>`).join('');
                 document.getElementById('agents').innerHTML = agentsHtml;
             } catch(e) {
-                document.getElementById('agents').innerHTML = 'Error loading agents';  # noqa: E501
+                const el = document.getElementById('agents');
+                el.innerHTML = 'Error loading agents';
             }
         }
 
         async function loadWorkflows() {
             try {
-                const res = await fetch('/api/workflows');
+                const res = await apiFetch('/api/workflows');
                 const data = await res.json();
                 const spanStyle = 'display:inline-block;background:#30363d;'
                     + 'padding:4px 10px;border-radius:12px;margin:2px;font-size:13px;';
@@ -528,7 +589,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             const el = document.getElementById('workflow-result');
             el.innerHTML = '<pre>Running ' + name + '...</pre>';
             try {
-                const res = await fetch('/api/workflows/' + name, { method: 'POST' });
+                const res = await apiFetch('/api/workflows/' + name, { method: 'POST' });
                 const data = await res.json();
                 el.innerHTML = '<pre>' + JSON.stringify(data, null, 2) + '</pre>';
             } catch(e) {

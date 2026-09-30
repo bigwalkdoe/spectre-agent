@@ -1,11 +1,14 @@
+import os
 from collections.abc import Generator
 from datetime import UTC, datetime
 from pathlib import Path
 
 from sqlmodel import Field, Session, SQLModel, create_engine, desc, select
 
-# Define the database path in the user's home or local workspace directory
-DB_DIR = Path.home() / ".config" / "spectre"
+# State lives in the user's config directory by default. SPECTRE_CONFIG_DIR
+# overrides it so the test suite can run against a throwaway tree instead of
+# writing into the real ~/.config/spectre/memory.db.
+DB_DIR = Path(os.environ.get("SPECTRE_CONFIG_DIR") or (Path.home() / ".config" / "spectre")).expanduser()
 DB_FILE = DB_DIR / "memory.db"
 
 # Create directory if it does not exist

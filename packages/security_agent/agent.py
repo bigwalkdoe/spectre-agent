@@ -1,3 +1,4 @@
+import os
 import re
 import shutil
 import subprocess
@@ -200,9 +201,28 @@ class SecurityAgent(BaseAgent):
         except Exception as e:
             return f"Ports audit failed: {e}"
 
+    # Suffixes worth scanning for credentials.
+    SCAN_SUFFIXES = (".py", ".toml", ".json", ".yaml", ".yml", ".ini", ".cfg", ".conf", ".sh", ".env")
+
+    def _is_scannable(self, path: Path) -> bool:
+        """Whether a file is worth reading during the secrets scan.
+
+        A suffix allowlist alone is not enough: pathlib reports an empty suffix
+        for `.env`, so the most likely home for a committed secret was skipped
+        entirely. Match those dotfiles by name as well.
+        """
+        name = path.name
+        if name == ".env" or name.startswith(".env."):
+            return True
+        return path.suffix in self.SCAN_SUFFIXES
+
     def _scan_secrets(self) -> str:
-        # Scan for private keys, oauth tokens, or passwords in .env, settings, or configs
-        scan_dir = Path(".")
+        # Scan for private keys, oauth tokens, or passwords in .env, settings, or configs.
+        # Pin the root to an absolute path so the result describes a known tree
+        # instead of whatever CWD the daemon happened to inherit.
+        scan_dir = Path(os.environ.get("SPECTRE_SCAN_ROOT", ".")).expanduser().resolve()
+        if not scan_dir.is_dir():
+            return f"Secrets scan skipped: {scan_dir} is not a directory."
         secret_patterns = {
             "private_key": re.compile(r"-----BEGIN [A-Z]+ PRIVATE KEY-----"),
             "generic_secret": re.compile(
@@ -218,7 +238,7 @@ class SecurityAgent(BaseAgent):
             for path in scan_dir.rglob("*"):
                 if any(part in ignore_dirs for part in path.parts):
                     continue
-                if path.is_file() and path.suffix in (".py", ".env", ".toml", ".json", ".yaml", ".yml"):
+                if path.is_file() and self._is_scannable(path):
                     try:
                         content = path.read_text(encoding="utf-8", errors="ignore")
                         for name, pattern in secret_patterns.items():
@@ -235,11 +255,11 @@ class SecurityAgent(BaseAgent):
                     except Exception:
                         pass
         except Exception as e:
-            return f"Secrets scan failed during traversal: {e}"
+            return f"Secrets scan of {scan_dir} failed during traversal: {e}"
 
         if found_incidents:
             return f"WARNING: Found potential secrets exposed in files: {', '.join(found_incidents)}."
-        return "Secrets scan complete. No exposed credentials or keys found in local files."
+        return f"Secrets scan of {scan_dir} complete. No exposed credentials or keys found."
 
     def _audit_ssh(self) -> str:
         ssh_config_file = Path("/etc/ssh/sshd_config")

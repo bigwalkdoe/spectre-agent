@@ -51,7 +51,7 @@ spectre/
 │   ├── api/main.py              # FastAPI REST API (24 endpoints, API key auth)
 │   └── daemon/main.py           # Kernel-based background daemon
 ├── config/                      # Configuration files
-├── tests/                       # Test suite (189 tests)
+├── tests/                       # Test suite (312 tests, hermetic — no real system commands)
 ├── docs/                        # Documentation
 └── scripts/                     # Installation and utilities
 ```
@@ -104,7 +104,10 @@ spectre/
 
 ## API Endpoints (24 total)
 
-All endpoints support API key authentication via `X-API-Key` header.
+All endpoints require API key authentication via the `X-API-Key` header.
+`SPECTRE_API_KEY` is mandatory: with it unset the API returns `503` rather than
+serving unauthenticated. `/api/health` is authenticated too, so container
+healthchecks must send the header.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|

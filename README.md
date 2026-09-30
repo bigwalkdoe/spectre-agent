@@ -200,12 +200,25 @@ spectre workflows my-workflow
 
 ### Authentication
 
-Set `SPECTRE_API_KEY` environment variable to enable API key authentication:
+**`SPECTRE_API_KEY` is required.** The API refuses to serve when it is unset —
+every endpoint, including `/api/health`, `/api/version`, `/api/system/status`
+and the dashboard, returns `503`. This is deliberate: the API can run workflows,
+write config and prune containers, so it must never fall back to open.
 
 ```bash
-export SPECTRE_API_KEY="your-secret-key"
-curl -H "X-API-Key: your-secret-key" http://localhost:8000/api/agents
+export SPECTRE_API_KEY="$(openssl rand -hex 32)"
+curl -H "X-API-Key: $SPECTRE_API_KEY" http://localhost:8000/api/agents
 ```
+
+Keys are compared in constant time. `docker-compose.yml` requires the variable
+and fails fast if it is absent; the systemd user unit reads it from
+`~/.config/spectre/spectre.env` (mode `0600`).
+
+### Custom workflow loading
+
+`POST /api/workflows/load` only accepts directories inside
+`~/.config/spectre/workflows`. Widen with `SPECTRE_WORKFLOW_ROOTS`
+(`:`-separated) — a request for any other directory is rejected with `400`.
 
 ### Endpoints
 

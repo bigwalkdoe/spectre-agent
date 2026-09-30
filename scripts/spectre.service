@@ -12,6 +12,11 @@ RestartSec=30
 StandardOutput=journal
 StandardError=journal
 
+# SPECTRE_API_KEY must be set here or the API refuses to start. Keep it 0600:
+#   install -m 600 /dev/null %h/.config/spectre/spectre.env
+#   echo 'SPECTRE_API_KEY=<key>' >> %h/.config/spectre/spectre.env
+EnvironmentFile=-%h/.config/spectre/spectre.env
+
 # Security hardening
 NoNewPrivileges=yes
 ProtectSystem=strict

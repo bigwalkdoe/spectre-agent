@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
+
 from packages.ai_agent.agent import AIAgent
 from packages.core.agent import BaseAgent
 from packages.developer_agent.agent import DeveloperAgent
@@ -547,6 +551,27 @@ def test_security_agent_scan_secrets() -> None:
     agent.initialize()
     output = agent._scan_secrets()
     assert isinstance(output, str)
+
+
+def test_security_agent_scan_secrets_reads_dotenv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`.env` has an empty pathlib suffix, so a suffix allowlist alone skipped it."""
+    (tmp_path / ".env").write_text('API_KEY="abcdefghij0123456789ABCDEFGHIJ"\n', encoding="utf-8")
+    (tmp_path / ".env.production").write_text('password="0123456789abcdefghijKLMNOP"\n', encoding="utf-8")
+    monkeypatch.setenv("SPECTRE_SCAN_ROOT", str(tmp_path))
+
+    agent = SecurityAgent()
+    agent.initialize()
+    output = agent._scan_secrets()
+    assert "WARNING" in output, output
+    assert "generic_secret" in output
+
+
+def test_security_agent_scan_secrets_reports_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The result must name the tree it scanned, not a bare 'nothing found'."""
+    monkeypatch.setenv("SPECTRE_SCAN_ROOT", str(tmp_path))
+    agent = SecurityAgent()
+    agent.initialize()
+    assert str(tmp_path) in agent._scan_secrets()
 
 
 def test_security_agent_audit_ssh() -> None:
