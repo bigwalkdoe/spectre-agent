@@ -1,0 +1,48 @@
+[Unit]
+Description=Spectre API (authenticated monitoring surface)
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+# SPECTRE_API_HOST and SPECTRE_API_PORT must be set in the EnvironmentFile
+# below. There is deliberately no default in this unit: the API is a control
+# surface that can run workflows, write config and prune containers, so a
+# port collision must fail loudly at start rather than silently bind somewhere
+# a monitoring scraper will mistake for the agent.
+#
+# apps.api.main must be importable, i.e. the package installed first:
+#   pip install -e ".[dev]"
+# WorkingDirectory only has to be writable for nothing in particular here; it
+# matches spectre.service so both units read state from the same place.
+ExecStart=/usr/bin/python3 -m uvicorn apps.api.main:app --host ${SPECTRE_API_HOST} --port ${SPECTRE_API_PORT} --proxy-headers
+WorkingDirectory=%h/.config/spectre
+
+# SPECTRE_API_KEY is mandatory. An unset key makes the API return 503 on every
+# endpoint by design (see apps/api/main.py), so fail fast at start instead of
+# serving a permanently-broken surface. Keep this file 0600 -- the key must not
+# appear in `systemctl show`, which renders the unit itself.
+#
+#   install -m 600 /dev/null %h/.config/spectre/spectre.env
+#   printf 'SPECTRE_API_KEY=%s\n' "$(openssl rand -hex 32)" >> %h/.config/spectre/spectre.env
+#   printf 'SPECTRE_API_HOST=127.0.0.1\nSPECTRE_API_PORT=8106\n' >> %h/.config/spectre/spectre.env
+#
+# Loopback-only is the intended binding: the monitoring suite scrapes this
+# over 127.0.0.1 and the endpoint needs no network reach. Bind 0.0.0.0 only if
+# a remote consumer genuinely needs it, and then only behind the API key.
+EnvironmentFile=%h/.config/spectre/spectre.env
+
+Restart=on-failure
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.config/spectre
+PrivateTmp=yes
+
+[Install]
+WantedBy=default.target

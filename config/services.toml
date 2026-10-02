@@ -5,6 +5,10 @@ strategy = "blue_green"
 build_context = "."
 dockerfile = "Dockerfile"
 health_endpoint = "/health"
+# Default only. The effective bind port is SPECTRE_API_PORT (see
+# scripts/spectre-api.service and docker-compose.yml) -- 8000 collides with
+# unrelated local services often enough that hardcoding it here has caused a
+# monitoring scraper to read another application's 404 as "the agent is down".
 port = 8000
 push_image = true
 registry = "ghcr.io/myorg"

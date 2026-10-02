@@ -5,8 +5,12 @@ services:
     build: .
     container_name: spectre
     restart: unless-stopped
+    # Published port is overridable because 8000 is one of the most contested
+    # ports on a workstation. Set SPECTRE_API_PORT to move it; leave unset for
+    # the 8000 default. scripts/spectre-api.service is the systemd equivalent
+    # and reads the same variable name.
     ports:
-      - "8000:8000"
+      - "${SPECTRE_API_PORT:-8000}:8000"
     volumes:
       - spectre-config:/root/.config/spectre
       - /var/run/docker.sock:/var/run/docker.sock

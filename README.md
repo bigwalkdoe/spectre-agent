@@ -198,10 +198,42 @@ spectre workflows my-workflow
 
 ## API Reference
 
+### Bind address and port
+
+The API binds `127.0.0.1:8000` by default. Both halves are overridable, and on a
+workstation you usually need to:
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `SPECTRE_API_HOST` | `127.0.0.1` | Bind address. Loopback is the intended default. |
+| `SPECTRE_API_PORT` | `8000` | Bind/published port. |
+
+`8000` is one of the most contested ports on a Linux workstation, and that
+collision is not hypothetical: when something unrelated already holds it, the API
+is unreachable while the other service answers on the same port. A monitoring
+scraper pointed at the wrong port then reads that service's `404` as "the agent is
+down", which points debugging at the agent instead of at the port.
+
+Set the port explicitly rather than relying on the default:
+
+```bash
+# systemd (see scripts/spectre-api.service — it requires both variables)
+install -m 600 /dev/null ~/.config/spectre/spectre.env
+printf 'SPECTRE_API_KEY=%s\n'      "$(openssl rand -hex 32)" >> ~/.config/spectre/spectre.env
+printf 'SPECTRE_API_HOST=127.0.0.1\nSPECTRE_API_PORT=8106\n'   >> ~/.config/spectre/spectre.env
+systemctl --user enable --now spectre-api
+
+# docker compose
+SPECTRE_API_PORT=8106 docker compose up -d
+```
+
+When you move the port, tell whatever scrapes you. The monitoring suite's
+`prometheus/security-metrics-exporter.sh` reads `SPECTRE_AGENT_URL` and defaults
+to `http://127.0.0.1:8106`; the two must agree.
+
 ### Authentication
 
 **`SPECTRE_API_KEY` is required.** The API refuses to serve when it is unset —
-| `/` | GET | Dashboard HTML (API key required) |
 every endpoint, including `/api/health`, `/api/version`, `/api/system/status`
 and the dashboard, returns `503`. This is deliberate: the API can run workflows,
 write config and prune containers, so it must never fall back to open.
@@ -221,10 +253,47 @@ and fails fast if it is absent; the systemd user unit reads it from
 `~/.config/spectre/workflows`. Widen with `SPECTRE_WORKFLOW_ROOTS`
 (`:`-separated) — a request for any other directory is rejected with `400`.
 
+### `GET /api/security/summary` — monitoring contract
+
+This endpoint has an external consumer, so its shape is a contract rather than
+an implementation detail. `spectre-system-maintenance-suite` polls it and
+republishes the response as Prometheus metrics; do not reshape it without
+updating that exporter.
+
+```json
+{
+  "unresolved_total": 623,
+  "unresolved_by_severity": { "critical": 0, "high": 170, "medium": 3, "low": 450 },
+  "oldest_unresolved_timestamp": "2026-07-20T00:29:03.657729+00:00",
+  "last_scan_timestamp": "2026-10-01T23:38:25.356594+00:00",
+  "has_ever_scanned": true
+}
+```
+
+| Field | Type | Guarantee |
+|-------|------|-----------|
+| `unresolved_total` | int | Count of unresolved findings. May be `0`. |
+| `unresolved_by_severity` | object | Counts keyed by severity. **Keys are sparse** — absent means zero, so a consumer must not assume `critical`/`high`/`medium`/`low` are all present. |
+| `oldest_unresolved_timestamp` | string \| null | Aware UTC ISO-8601. `null` when nothing is unresolved. |
+| `last_scan_timestamp` | string \| null | Aware UTC ISO-8601, derived from the newest recorded security-agent run — **never** the moment of the request. |
+| `has_ever_scanned` | bool | Distinguishes "scanned and found nothing" from "never scanned". |
+
+Two properties the consumer depends on and that must survive refactors:
+
+- **A stale database reports a stale scan.** `last_scan_timestamp` comes from
+  recorded data, so serving from an old database reports an old scan time
+  rather than claiming a scan just happened.
+- **Read-only and derived from records.** It runs no scans and mutates nothing,
+  so polling it every few minutes is safe.
+
+It is authenticated like every other endpoint: `401` without a valid
+`X-API-Key`, `503` when `SPECTRE_API_KEY` is unset.
+
 ### Endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
+| `/` | GET | Dashboard HTML (API key required) |
 | `/api/health` | GET | Health check |
 | `/api/version` | GET | Version info |
 | `/api/agents` | GET | List agents |
@@ -242,11 +311,12 @@ and fails fast if it is absent; the systemd user unit reads it from
 | `/api/events` | GET | System events |
 | `/api/schedule` | GET/POST | Schedule management |
 | `/api/schedule/{name}` | DELETE | Remove schedule |
-| `/api/security/summary` | GET | Current security exposure (unresolved findings by severity, last scan time) |
+| `/api/security/summary` | GET | Current security exposure. [Contract above](#get-apisecuritysummary--monitoring-contract) |
 | `/api/reports` | GET | List reports |
 | `/api/reports/{report_id}` | GET | Get report |
 | `/api/config/{key}` | GET/PUT | Config management |
 | `/api/decisions` | GET | List decisions |
+
 
 ## Configuration
 

@@ -54,7 +54,26 @@ spectre/
 ├── tests/                       # Test suite (317 tests, hermetic — no real system commands)
 ├── docs/                        # Documentation
 └── scripts/                     # Installation and utilities
+    ├── spectre.service          # Daemon user unit (background kernel)
+    ├── spectre-api.service      # API user unit; requires SPECTRE_API_HOST/PORT
+    └── check-api-docs.py        # Fails when README/AGENTS.md drift from the code
 ```
+
+### API bind address
+
+`SPECTRE_API_HOST` (default `127.0.0.1`) and `SPECTRE_API_PORT` (default `8000`)
+select the bind address. `8000` is heavily contested on a workstation, so
+`scripts/spectre-api.service` requires both to be set explicitly instead of
+defaulting — a silent bind onto an occupied port serves another application's
+`404` and gets misread as the agent being down. The monitoring consumer
+(`spectre-system-maintenance-suite`) reads `SPECTRE_AGENT_URL` and expects these
+to agree with it.
+
+`/api/security/summary` is a **published contract**: the maintenance suite scrapes
+it and republishes the response as Prometheus metrics. Preserve
+`has_ever_scanned`, and keep `last_scan_timestamp` derived from recorded scans
+rather than from request time. See the README section
+"`GET /api/security/summary` — monitoring contract" for the full field table.
 
 ## CLI Commands (31 total)
 
@@ -129,7 +148,7 @@ healthchecks must send the header.
 | `/api/events` | GET | System events |
 | `/api/schedule` | GET/POST | Schedule management |
 | `/api/schedule/{name}` | DELETE | Remove schedule |
-| `/api/security/summary` | GET | Current security exposure (unresolved findings by severity, last scan time) |
+| `/api/security/summary` | GET | Current security exposure (unresolved findings by severity, last scan time). Published contract — see above |
 | `/api/reports` | GET | List reports |
 | `/api/reports/{report_id}` | GET | Get report |
 | `/api/config/{key}` | GET/PUT | Config management |
