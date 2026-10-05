@@ -13,16 +13,24 @@ sleep for a timeout to be the thing under test.
 
 from __future__ import annotations
 
+import os
+import re
 import stat
 import time
+import tracemalloc
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from packages.dispatch.envelope import OUTPUT_LIMIT
 from packages.dispatch.resolve import resolve
-from packages.dispatch.runner import RunOutcome, run_action
+from packages.dispatch.runner import RunOutcome, _BoundedOutput, run_action
 from tests.dispatch.conftest import make_job
+
+# The elision notice Task 3 established, matched rather than rebuilt so that a change
+# to its wording shows up here as a failure instead of as a silent mismatch.
+_MARKER = re.compile(r"\n\.\.\. \[(\d+) bytes elided\] \.\.\.\n")
 
 
 def _write(root: Path, name: str, body: str) -> None:
@@ -95,10 +103,39 @@ def test_timeout_kills_the_process_group(tmp_path: Path, monkeypatch: pytest.Mon
 
 def test_timeout_keeps_partial_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A timed-out action is the one whose output explains itself, so what it wrote
-    before the deadline belongs in the record."""
+    before the deadline belongs in the record.
+
+    Three seconds, not one: the timeout starts counting at `Popen`, so on a loaded CI
+    runner a second can be gone before bash has even reached its `echo`, and the
+    failure would read as "output was lost" rather than "the machine was busy".
+    """
     monkeypatch.setenv("SPECTRE_ACTIONS_ROOT", str(tmp_path))
-    got = _run(tmp_path, "slow.sh", "#!/bin/bash\necho started\nsleep 30\n", timeout=1)
+    got = _run(tmp_path, "slow.sh", "#!/bin/bash\necho started\nsleep 30\n", timeout=3)
     assert "started" in got.envelope.stdout_tail
+
+
+def test_a_timeout_escalates_to_sigkill(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """SIGTERM is a request, not a guarantee, and an action may refuse it: a script
+    that traps TERM has to be stopped anyway, or the record says "timeout" while the
+    action carries on — the exact orphan this task's review focus is about. The trap
+    is inherited by the `sleep`, so the whole group ignores SIGTERM and only the
+    escalation ends it.
+
+    The envelope cannot tell a stopped action from a stubborn one — both are recorded
+    as a timeout — so the action is asked directly, and its pid is the thing that
+    proves it got going: a pid that no longer exists is what a kill leaves behind. A
+    missing `pid.txt` fails loudly as a missing file rather than as a lost kill.
+    """
+    monkeypatch.setenv("SPECTRE_ACTIONS_ROOT", str(tmp_path))
+    pid_file = tmp_path / "pid.txt"
+    body = f"#!/bin/bash\ntrap '' TERM\necho started\necho $$ > {pid_file}\nsleep 30\n"
+    got = _run(tmp_path, "stubborn.sh", body, timeout=1)
+
+    assert got.envelope.status.value == "timeout"
+    assert got.returncode is None
+    assert "started" in got.envelope.stdout_tail
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(pid_file.read_text()), 0)
 
 
 def test_exit_code_survives_a_huge_stdout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -116,6 +153,104 @@ def test_args_are_forwarded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     _write(tmp_path, "ok.sh", '#!/bin/bash\necho "arg=$1"\n')
     got = run_action(resolve(make_job("ok.sh")), ["--apply"], trigger="cli")
     assert "arg=--apply" in got.envelope.stdout_tail
+
+
+# What bounding the reader costs and buys. The bound the record applies in
+# `build_envelope` is no bound at all while the string is being built, so the runner
+# keeps the same window from the first line on. The tests below pin that the window
+# changes nothing for an action that stays inside it, and that it costs nothing of
+# what explains a run that does not.
+
+
+def _lines(count: int) -> str:
+    """`count` lines of 40 bytes, the shape a looping `echo` actually produces."""
+    return "".join(f"{i:012d} abcdefghijklmnopqrstuvwxyz\n" for i in range(count))
+
+
+def _emit_lines(count: int) -> str:
+    """A script printing the same `count` lines `_lines` would have produced."""
+    return f'#!/bin/bash\nfor ((i=0;i<{count};i++)); do printf "%012d abcdefghijklmnopqrstuvwxyz\\n" "$i"; done\n'
+
+
+def test_output_within_the_limit_reaches_the_record_intact(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Just inside the limit, every byte survives and no marker appears: bounding the
+    reader must not become an excuse to elide a run that never overran.
+
+    1638 lines of 40 bytes is 65520, sixteen under `OUTPUT_LIMIT`.
+    """
+    monkeypatch.setenv("SPECTRE_ACTIONS_ROOT", str(tmp_path))
+    got = _run(tmp_path, "chatty.sh", _emit_lines(1638))
+    assert got.envelope.status.value == "success", got.envelope.stderr_tail
+    assert got.envelope.stdout_tail == _lines(1638)
+    assert "elided" not in got.envelope.stdout_tail
+
+
+def test_output_over_the_limit_is_bounded_and_keeps_both_ends(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Past the limit the record stops growing, and what it keeps is the two ends:
+    the head for what the action was doing, the tail for how it ended. The tail runs
+    to the last byte, which is what a payload fence needs to survive."""
+    monkeypatch.setenv("SPECTRE_ACTIONS_ROOT", str(tmp_path))
+    got = _run(tmp_path, "loud.sh", _emit_lines(4000))
+    tail = got.envelope.stdout_tail
+
+    assert len(tail.encode()) <= OUTPUT_LIMIT
+    assert tail.startswith("000000000000 abcdefghijklmnopqrstuvwxyz\n")
+    assert tail.endswith("000000003999 abcdefghijklmnopqrstuvwxyz\n")
+
+
+def test_the_elision_marker_counts_what_it_actually_dropped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The marker states how many bytes went missing, so a short output and an elided
+    one cannot be mistaken for each other. Exactly one of them: the bound belongs
+    once, and a second marker means the runner bounded the stream and then the
+    envelope bounded it again, each cut counted against a window that was already
+    spent.
+
+    Checked as `elided + shown == printed` rather than against a re-derived window,
+    so the test cannot drift from the arithmetic it is checking.
+    """
+    monkeypatch.setenv("SPECTRE_ACTIONS_ROOT", str(tmp_path))
+    printed = len(_lines(4000).encode())
+    got = _run(tmp_path, "loud.sh", _emit_lines(4000))
+
+    found = list(_MARKER.finditer(got.envelope.stdout_tail))
+    assert len(found) == 1, f"expected one elision marker, found {len(found)}"
+    shown = len(got.envelope.stdout_tail.encode()) - len(found[0].group(0).encode())
+    assert int(found[0].group(1)) + shown == printed
+
+
+def test_a_payload_fence_survives_an_overrun(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The fence with a quarter of a megabyte in front of it: the bounded buffer
+    keeps the *end* of the stream at full fidelity, which is the only reason
+    `parse_payload` can still read it. Without the tail window the fence would be
+    dropped along with the middle and this action's structured result would vanish."""
+    monkeypatch.setenv("SPECTRE_ACTIONS_ROOT", str(tmp_path))
+    body = _emit_lines(4000) + "printf '```spectre\\n{\"removed\": 3}\\n```\\n'\n"
+    got = _run(tmp_path, "report.sh", body)
+
+    assert got.envelope.payload == {"removed": 3}
+    assert "elided" in got.envelope.stdout_tail
+
+
+def test_the_buffer_does_not_grow_with_the_stream() -> None:
+    """The bound has to hold while the stream is read, not once it is over: an action
+    that echoes for its whole timeout would otherwise grow the dispatcher until
+    something OOM-killed it, with nothing here noticing.
+
+    Measured on the buffer rather than through a subprocess, because peak allocation
+    is the claim and the process's RSS is not measurable to that precision here. 20 MB
+    through the buffer, and less than 4 MB of it may survive the trip.
+    """
+    buffer = _BoundedOutput()
+    tracemalloc.start()
+    try:
+        for _ in range(200):
+            buffer.write("x" * 100_000)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+    assert peak < 4_000_000, f"retained {peak} bytes of a 20 MB stream"
+    assert len(buffer.text().encode()) <= OUTPUT_LIMIT
 
 
 def test_env_merges_over_the_parent_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
