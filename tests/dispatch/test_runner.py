@@ -231,6 +231,38 @@ def test_a_payload_fence_survives_an_overrun(tmp_path: Path, monkeypatch: pytest
     assert "elided" in got.envelope.stdout_tail
 
 
+def test_one_enormous_line_is_bounded_and_keeps_its_true_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Twenty megabytes with no newline in it at all: a `base64` with its wrapping
+    turned off, a `curl` of a binary blob. A reader splitting on newlines holds all
+    of it before handing over a byte, which is the unbounded read the buffer exists to
+    prevent — so the reader is measured here, not just the record, which looks the
+    same either way once `truncate_output` has had its turn.
+
+    Eight megabytes of threshold against the 430 KB this reader is measured to use,
+    and against the 60 MB a line-splitting one is measured to hold: an action that
+    chooses not to emit a newline is not a reason for the dispatcher to grow without
+    limit.
+    """
+    monkeypatch.setenv("SPECTRE_ACTIONS_ROOT", str(tmp_path))
+    body = "#!/bin/bash\nhead -c 20000000 /dev/zero | tr '\\0' 'x'\nprintf 'THE-END'\n"
+
+    tracemalloc.start()
+    try:
+        got = _run(tmp_path, "blob.sh", body)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+    tail = got.envelope.stdout_tail
+    assert got.envelope.status.value == "success", got.envelope.stderr_tail
+    assert len(tail.encode()) <= OUTPUT_LIMIT
+    # The last bytes the action actually wrote. A payload fence survives only because
+    # this tail is the true end of the stream, so a tail cut short at one of the
+    # reader's own boundaries would fail here first.
+    assert tail.endswith(f"{'x' * 64}THE-END")
+    assert peak < 8_000_000, f"the reader held {peak} bytes of a 20 MB line"
+
+
 def test_the_buffer_does_not_grow_with_the_stream() -> None:
     """The bound has to hold while the stream is read, not once it is over: an action
     that echoes for its whole timeout would otherwise grow the dispatcher until

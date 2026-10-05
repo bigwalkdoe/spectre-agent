@@ -21,7 +21,7 @@ cannot be bypassed by assembling fields here. What it must not do is *hand* it
 something unbounded — an action that echoes for its whole timeout is bounded by
 `truncate_output` only after the fact, which is no bound at all while the string is
 being built — so both pipes are drained by their own threads into a buffer that
-holds the same head-and-tail window from the first line on. What it must not do
+holds the same head-and-tail window from the first piece on. What it must not do
 either is discard what it read, because a timed-out action is exactly the run whose
 output explains itself: the head says what it was doing and the tail is where it
 says so.
@@ -44,16 +44,17 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import partial
 from typing import IO, cast
 
 from packages.dispatch.envelope import (
-    _MAX_MARKER_LEN,
+    MAX_MARKER_LEN,
     OUTPUT_LIMIT,
     Envelope,
     Status,
-    _byte_len,
-    _marker,
     build_envelope,
+    byte_len,
+    marker,
     status_for_exit_code,
 )
 from packages.dispatch.resolve import ResolvedAction
@@ -72,7 +73,12 @@ _DRAIN_GRACE_SECONDS = 2.0
 # arithmetic, imported rather than re-derived: the bound applied while reading and
 # the bound the record applies afterwards have to be the same bound, or the elision
 # marker could describe a cut the record never makes.
-_WINDOW = (OUTPUT_LIMIT - _MAX_MARKER_LEN) // 2
+_WINDOW = (OUTPUT_LIMIT - MAX_MARKER_LEN) // 2
+
+# Bytes taken from a pipe at a time. Small enough that the reader never holds more
+# than this of an action's output however the action writes it, large enough that the
+# number of reads is not itself a cost.
+_READ_CHUNK_BYTES = 8192
 
 
 class _BoundedOutput:
@@ -89,9 +95,7 @@ class _BoundedOutput:
     Nothing held here grows with the stream, which is the whole point: an action
     that echoes for its whole timeout is bounded by this rather than by whatever
     memory the host has spare, and the marker's count stays exact because it is
-    taken from what the reader really saw. One exception, a line longer than the
-    limit, which a reader splitting on newlines hands over whole — bounded by the
-    action rather than by time, and the same property the one-shot truncation had.
+    taken from what the reader really saw.
     """
 
     def __init__(self) -> None:
@@ -126,8 +130,8 @@ class _BoundedOutput:
         # Counted from what survives rather than from the cut points, as
         # `truncate_output` does it: a cut inside a multi-byte character must not
         # make the marker claim more than is really missing.
-        elided = self._total - _byte_len(head) - _byte_len(tail)
-        return f"{head}{_marker(elided)}{tail}"
+        elided = self._total - byte_len(head) - byte_len(tail)
+        return f"{head}{marker(elided)}{tail}"
 
 
 @dataclass(frozen=True)
@@ -144,15 +148,24 @@ class RunOutcome:
 
 
 def _pump(stream: IO[str], sink: _BoundedOutput) -> None:
-    """Feed every line `stream` yields to `sink`, until its writer closes it.
+    """Feed `stream` to `sink` in fixed-size pieces, until its writer closes it.
+
+    Pieces rather than lines, because a line is unbounded and this path is bounded
+    by design. An action that emits no newline at all for megabytes — a `base64`
+    with its wrapping turned off, a `curl` of a binary blob — makes a line-splitting
+    reader accumulate the whole of it before handing over a single byte, which is the
+    same unbounded read the buffer exists to prevent, one function along. A piece
+    falling mid-line costs nothing: the sink is holding a byte stream rather than
+    lines, and its tail still runs to the last byte of the stream, which is what
+    leaves a payload fence as the final thing it sees.
 
     One thread per stream, each with its own sink: the sinks are read only after
     both threads have been joined, so there is exactly one writer each and no lock
     to hold.
     """
     with contextlib.closing(stream):
-        for line in stream:
-            sink.write(line)
+        for piece in iter(partial(stream.read, _READ_CHUNK_BYTES), ""):
+            sink.write(piece)
 
 
 def _reader(stream: IO[str], sink: _BoundedOutput) -> threading.Thread:

@@ -99,8 +99,13 @@ def status_for_exit_code(code: int) -> Status:
     return Status.SUCCESS if code == 0 else Status.FAILED
 
 
-def _marker(elided: int) -> str:
-    """The line that stands in for the bytes dropped from the middle."""
+def marker(elided: int) -> str:
+    """The line that stands in for the bytes dropped from the middle.
+
+    Public because the runner builds the same head-and-tail window while it reads,
+    and a second copy of this format would be a second definition of what an elision
+    looks like — the notice a record carries has to be the same one either way.
+    """
     return f"\n... [{elided} bytes elided] ...\n"
 
 
@@ -110,10 +115,10 @@ def _marker(elided: int) -> str:
 # against the count it will print, which it cannot know until it has sliced:
 # reserving the widest marker makes the bound provable in one pass, at the cost of a
 # few bytes of tail.
-_MAX_MARKER_LEN = len(_marker(10**20))
+MAX_MARKER_LEN = len(marker(10**20))
 
 
-def _byte_len(text: str) -> int:
+def byte_len(text: str) -> int:
     """How many bytes `text` occupies encoded, which is the unit bounded here.
 
     Encoded the same way `truncate_output` encodes, so the count cannot disagree
@@ -156,16 +161,16 @@ def truncate_output(text: str, limit: int = OUTPUT_LIMIT) -> str:
     # what is left after reserving room for the widest marker. Decided before any
     # slicing: with no room for a byte on each side there is nothing to put the
     # marker between, and a zero-width slice would be the whole string, not empty.
-    per_side = (limit - _MAX_MARKER_LEN) // 2
+    per_side = (limit - MAX_MARKER_LEN) // 2
     if per_side < 1:
-        return _marker(len(data))
+        return marker(len(data))
 
     head = data[:per_side].decode("utf-8", "ignore")
     tail = data[-per_side:].decode("utf-8", "ignore")
     # Counted from what survives rather than from the cut points, so a cut inside a
     # multi-byte character cannot make the marker overstate what is still shown.
-    elided = len(data) - _byte_len(head) - _byte_len(tail)
-    return f"{head}{_marker(elided)}{tail}"
+    elided = len(data) - byte_len(head) - byte_len(tail)
+    return f"{head}{marker(elided)}{tail}"
 
 
 def parse_payload(stdout: str) -> dict[str, Any] | None:
@@ -203,7 +208,7 @@ def parse_payload(stdout: str) -> dict[str, Any] | None:
         return None
 
     body = "\n".join(lines[first + 1 : last])
-    if _byte_len(body) > PAYLOAD_LIMIT:
+    if byte_len(body) > PAYLOAD_LIMIT:
         return None
 
     try:
