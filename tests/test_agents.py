@@ -24,7 +24,7 @@ def test_base_agent_is_abstract() -> None:
     import pytest
 
     with pytest.raises(TypeError):
-        BaseAgent("test")
+        BaseAgent("test")  # type: ignore[abstract]
 
 
 def test_agent_lifecycle() -> None:
@@ -40,7 +40,7 @@ def test_agent_lifecycle() -> None:
         PublishingAgent,
     ]
     for cls in agents:
-        agent = cls()
+        agent = cls()  # type: ignore[abstract]
         assert hasattr(agent, "initialize")
         assert hasattr(agent, "plan")
         assert hasattr(agent, "execute")
@@ -581,7 +581,9 @@ def test_security_agent_audit_ssh() -> None:
     assert isinstance(output, str)
 
 
-def _sshd_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, main: str, includes: dict[str, str]):
+def _sshd_fixture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, main: str, includes: dict[str, str]
+) -> SecurityAgent:
     """Point the ssh audit at a synthetic /etc/ssh tree."""
     dropin = tmp_path / "sshd_config.d"
     dropin.mkdir()
