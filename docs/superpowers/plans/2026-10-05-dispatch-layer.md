@@ -964,6 +964,29 @@ def test_run_failure_exits_5_and_records(actions: Path) -> None:
     assert any(x.action == "backups/backup-fail" for x in recent_runs(limit=20))
 
 
+def test_run_records_a_real_commit_when_actions_are_a_repo(actions: Path) -> None:
+    """Full wiring: resolve -> provenance -> run record, against a real repo."""
+    import subprocess
+
+    from packages.memory.db import recent_runs
+
+    env = {"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null",
+           "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+    subprocess.run(["git", "init", "-q"], cwd=actions, check=True, env=env)
+    subprocess.run(["git", "add", "-A"], cwd=actions, check=True, env=env)
+    subprocess.run(["git", "commit", "-qm", "x"], cwd=actions, check=True, env=env)
+
+    runner.invoke(app, ["run", "backups/backup-all"])
+    row = recent_runs(limit=1)[0]
+    expected = subprocess.run(
+        ["git", "rev-parse", "--short", "HEAD"], cwd=actions,
+        capture_output=True, text=True, check=True, env=env,
+    ).stdout.strip()
+    assert row.git_commit == expected
+    assert row.git_dirty is False
+
+
 def test_run_forwards_arguments(actions: Path) -> None:
     _write(actions, "backups/backup-all.sh", "#!/bin/bash\necho \"a=$1\"\n")
     r = runner.invoke(app, ["run", "backups/backup-all", "--", "--dry-run"])
@@ -976,7 +999,11 @@ def test_run_records_provenance(actions: Path) -> None:
     row = recent_runs(limit=1)[0]
     assert row.trigger == "cli"
     assert row.resolved_path.endswith("backups/backup-all.sh")
-    assert row.git_commit != ""
+    # A plain tmp_path actions root is not a git repository, so provenance
+    # degrades to empty rather than raising. Assert the degradation here; the
+    # real git-reading path is pinned by tests/dispatch/test_resolve.py.
+    assert row.git_commit == ""
+    assert row.git_dirty is False
 
 
 def test_actions_list_shows_the_registry() -> None:
