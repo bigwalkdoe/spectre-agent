@@ -1,0 +1,521 @@
+[
+  {
+    "name": "backups/backup-all",
+    "action": "backups/backup-all.sh",
+    "group": "backups",
+    "summary": "Run every backup job and print a summary report",
+    "mutates": true,
+    "concurrency": "forbid",
+    "schedule_hint": "0 2 * * 6",
+    "replaces": [
+      "crontab:0 2 * * 6",
+      "user:backup.service"
+    ]
+  },
+  {
+    "name": "backups/backup-configurations",
+    "action": "backups/backup-configurations.sh",
+    "group": "backups",
+    "summary": "Back up system and application configuration files",
+    "mutates": true,
+    "concurrency": "forbid"
+  },
+  {
+    "name": "backups/backup-databases",
+    "action": "backups/backup-databases.sh",
+    "group": "backups",
+    "summary": "Back up PostgreSQL and Redis databases",
+    "mutates": true,
+    "concurrency": "forbid",
+    "schedule_hint": "0 1 * * *",
+    "replaces": [
+      "crontab:0 1 * * *"
+    ]
+  },
+  {
+    "name": "backups/backup-docker-volumes",
+    "action": "backups/backup-docker-volumes.sh",
+    "group": "backups",
+    "summary": "Back up this Compose project's named Docker volumes",
+    "mutates": true,
+    "concurrency": "forbid"
+  },
+  {
+    "name": "backups/backup-encryption",
+    "action": "backups/backup-encryption.sh",
+    "group": "backups",
+    "summary": "Encrypt backup archives before they leave the host",
+    "mutates": true,
+    "concurrency": "forbid"
+  },
+  {
+    "name": "backups/backup-projects",
+    "action": "backups/backup-projects.sh",
+    "group": "backups",
+    "summary": "Back up critical project directories",
+    "mutates": true,
+    "concurrency": "forbid"
+  },
+  {
+    "name": "backups/backup-verification",
+    "action": "backups/backup-verification.sh",
+    "group": "backups",
+    "summary": "Verify backup integrity and completeness",
+    "mutates": true,
+    "concurrency": "forbid"
+  },
+  {
+    "name": "backups/check-backup-health",
+    "action": "backups/check-backup-health.sh",
+    "group": "backups",
+    "summary": "Verify backups exist, are readable, non-empty and recent",
+    "mutates": true,
+    "concurrency": "forbid",
+    "schedule_hint": "50 4 * * *",
+    "replaces": [
+      "crontab:50 4 * * *"
+    ]
+  },
+  {
+    "name": "backups/replicate-backups",
+    "action": "backups/replicate-backups.sh",
+    "group": "backups",
+    "summary": "Replicate backups to a remote host, S3 and/or B2",
+    "mutates": true,
+    "concurrency": "forbid",
+    "schedule_hint": "40 4 * * *",
+    "replaces": [
+      "crontab:40 4 * * *"
+    ]
+  },
+  {
+    "name": "backups/restore-databases",
+    "action": "backups/restore-databases.sh",
+    "group": "backups",
+    "summary": "Restore PostgreSQL databases from backup archives",
+    "mutates": true,
+    "concurrency": "forbid"
+  },
+  {
+    "name": "backups/restore-docker-volumes",
+    "action": "backups/restore-docker-volumes.sh",
+    "group": "backups",
+    "summary": "Restore named Docker volumes from archives",
+    "mutates": true,
+    "concurrency": "forbid"
+  },
+  {
+    "name": "backups/restore-from-remote",
+    "action": "backups/restore-from-remote.sh",
+    "group": "backups",
+    "summary": "Restore data from off-site backup locations",
+    "mutates": true,
+    "concurrency": "forbid"
+  },
+  {
+    "name": "backups/setup-offsite-backup",
+    "action": "backups/setup-offsite-backup.sh",
+    "group": "backups",
+    "summary": "Configure rsync, S3 and B2 off-site backup destinations",
+    "mutates": true,
+    "concurrency": "forbid"
+  },
+  {
+    "name": "check-config-consistency",
+    "action": "check-config-consistency.sh",
+    "group": "check-config-consistency",
+    "summary": "Check monitoring config names real services and targets"
+  },
+  {
+    "name": "check-docs-references",
+    "action": "check-docs-references.sh",
+    "group": "check-docs-references",
+    "summary": "Fail when docs tell a reader to run a script that is absent"
+  },
+  {
+    "name": "deploy-enhanced-monitoring",
+    "action": "deploy-enhanced-monitoring.sh",
+    "group": "deploy-enhanced-monitoring",
+    "summary": "Deploy the enhanced monitoring components",
+    "sudo": true,
+    "mutates": true
+  },
+  {
+    "name": "deploy-monitoring",
+    "action": "deploy-monitoring.sh",
+    "group": "deploy-monitoring",
+    "summary": "Deploy the Prometheus and Grafana monitoring stack",
+    "sudo": true,
+    "mutates": true
+  },
+  {
+    "name": "detect-distribution",
+    "action": "detect-distribution.sh",
+    "group": "detect-distribution",
+    "summary": "Detect the Linux distribution and set package-manager paths"
+  },
+  {
+    "name": "maintenance/audit-trail",
+    "action": "maintenance/audit-trail.sh",
+    "group": "maintenance",
+    "summary": "Generate centralized audit logs for system activity"
+  },
+  {
+    "name": "maintenance/check-disk-space",
+    "action": "maintenance/check-disk-space.sh",
+    "group": "maintenance",
+    "summary": "Monitor disk usage and alert on low space",
+    "replaces": [
+      "system:disk-space-check.service"
+    ]
+  },
+  {
+    "name": "maintenance/check-performance",
+    "action": "maintenance/check-performance.sh",
+    "group": "maintenance",
+    "summary": "Monitor system performance metrics and alert on anomalies"
+  },
+  {
+    "name": "maintenance/cleanup-cache",
+    "action": "maintenance/cleanup-cache.sh",
+    "group": "maintenance",
+    "summary": "Remove cache files older than the configured age",
+    "mutates": true,
+    "concurrency": "forbid",
+    "schedule_hint": "0 4 * * 1",
+    "replaces": [
+      "crontab:0 4 * * 1"
+    ]
+  },
+  {
+    "name": "maintenance/cleanup-downloads",
+    "action": "maintenance/cleanup-downloads.sh",
+    "group": "maintenance",
+    "summary": "Remove old files from the downloads directory",
+    "mutates": true,
+    "concurrency": "forbid",
+    "schedule_hint": "0 3 * * 0",
+    "replaces": [
+      "crontab:0 3 * * 0"
+    ]
+  },
+  {
+    "name": "maintenance/cleanup-logs",
+    "action": "maintenance/cleanup-logs.sh",
+    "group": "maintenance",
+    "summary": "Rotate and prune logs",
+    "mutates": true,
+    "concurrency": "forbid"
+  },
+  {
+    "name": "maintenance/cleanup-system",
+    "action": "maintenance/cleanup-system.sh",
+    "group": "maintenance",
+    "summary": "Run distribution-agnostic system maintenance tasks",
+    "mutates": true,
+    "concurrency": "forbid"
+  },
+  {
+    "name": "maintenance/cleanup-temp",
+    "action": "maintenance/cleanup-temp.sh",
+    "group": "maintenance",
+    "summary": "Remove old files from the temporary directories",
+    "mutates": true,
+    "concurrency": "forbid",
+    "schedule_hint": "0 2 * * *",
+    "replaces": [
+      "crontab:0 2 * * *"
+    ]
+  },
+  {
+    "name": "maintenance/cleanup-unused-resources",
+    "action": "maintenance/cleanup-unused-resources.sh",
+    "group": "maintenance",
+    "summary": "Reclaim unused Docker resources and stale backups",
+    "mutates": true,
+    "concurrency": "forbid",
+    "schedule_hint": "0 4 * * 0",
+    "replaces": [
+      "crontab:0 4 * * 0",
+      "user:docker-cleanup.service"
+    ]
+  },
+  {
+    "name": "maintenance/compliance-report",
+    "action": "maintenance/compliance-report.sh",
+    "group": "maintenance",
+    "summary": "Generate compliance reports for security and operations"
+  },
+  {
+    "name": "maintenance/network-monitor",
+    "action": "maintenance/network-monitor.sh",
+    "group": "maintenance",
+    "summary": "Monitor network connectivity and performance",
+    "replaces": [
+      "user:network-monitor.service"
+    ]
+  },
+  {
+    "name": "maintenance/network-security-hardening",
+    "action": "maintenance/network-security-hardening.sh",
+    "group": "maintenance",
+    "summary": "Apply network security best practices"
+  },
+  {
+    "name": "maintenance/run-maintenance",
+    "action": "maintenance/run-maintenance.sh",
+    "group": "maintenance",
+    "summary": "Run every maintenance task and generate reports",
+    "mutates": true,
+    "concurrency": "forbid",
+    "replaces": [
+      "user:maintenance.service"
+    ]
+  },
+  {
+    "name": "maintenance/system-health-check",
+    "action": "maintenance/system-health-check.sh",
+    "group": "maintenance",
+    "summary": "Run a comprehensive system health analysis"
+  },
+  {
+    "name": "maintenance/vacuum-databases",
+    "action": "maintenance/vacuum-databases.sh",
+    "group": "maintenance",
+    "summary": "Vacuum and analyze PostgreSQL databases",
+    "schedule_hint": "30 2 * * *",
+    "replaces": [
+      "crontab:30 2 * * *"
+    ]
+  },
+  {
+    "name": "ml-anomaly/run_ml_pipeline",
+    "action": "ml-anomaly/run_ml_pipeline.sh",
+    "group": "ml-anomaly",
+    "summary": "Run ML anomaly detection and auto-remediation"
+  },
+  {
+    "name": "ml-anomaly/setup_ml_anomaly",
+    "action": "ml-anomaly/setup_ml_anomaly.sh",
+    "group": "ml-anomaly",
+    "summary": "Set up ML anomaly detection and free-LLM remediation"
+  },
+  {
+    "name": "multi-server/manage-servers",
+    "action": "multi-server/manage-servers.sh",
+    "group": "multi-server",
+    "summary": "Manage the configured fleet of hosts"
+  },
+  {
+    "name": "network/network-monitor",
+    "action": "network/network-monitor.sh",
+    "group": "network",
+    "summary": "Monitor network connectivity and performance",
+    "sudo": true,
+    "mutates": true
+  },
+  {
+    "name": "network/network-security-hardening",
+    "action": "network/network-security-hardening.sh",
+    "group": "network",
+    "summary": "Apply network security best practices",
+    "sudo": true,
+    "mutates": true
+  },
+  {
+    "name": "network/optimize-network-config",
+    "action": "network/optimize-network-config.sh",
+    "group": "network",
+    "summary": "Tune the distribution-agnostic network configuration",
+    "sudo": true,
+    "mutates": true
+  },
+  {
+    "name": "network/setup-vpn",
+    "action": "network/setup-vpn.sh",
+    "group": "network",
+    "summary": "Set up WireGuard server and client configuration",
+    "sudo": true,
+    "mutates": true
+  },
+  {
+    "name": "performance/check-performance",
+    "action": "performance/check-performance.sh",
+    "group": "performance",
+    "summary": "Report CPU and memory usage",
+    "replaces": [
+      "system:performance-check.service",
+      "user:performance-check.service"
+    ]
+  },
+  {
+    "name": "performance/cloud-cost-tracker",
+    "action": "performance/cloud-cost-tracker.sh",
+    "group": "performance",
+    "summary": "Track cloud resource costs"
+  },
+  {
+    "name": "performance/optimize-docker-resources",
+    "action": "performance/optimize-docker-resources.sh",
+    "group": "performance",
+    "summary": "Set resource limits on Compose containers",
+    "sudo": true,
+    "mutates": true
+  },
+  {
+    "name": "performance/optimize-system-performance",
+    "action": "performance/optimize-system-performance.sh",
+    "group": "performance",
+    "summary": "Apply system performance optimizations",
+    "sudo": true,
+    "mutates": true
+  },
+  {
+    "name": "performance/resource-rightsizing",
+    "action": "performance/resource-rightsizing.sh",
+    "group": "performance",
+    "summary": "Analyze usage and recommend rightsizing"
+  },
+  {
+    "name": "project-specific/backup-all-projects",
+    "action": "project-specific/backup-all-projects.sh",
+    "group": "project-specific",
+    "summary": "Back up every configured project",
+    "mutates": true,
+    "concurrency": "forbid"
+  },
+  {
+    "name": "project-specific/backup-modelink",
+    "action": "project-specific/backup-modelink.sh",
+    "group": "project-specific",
+    "summary": "Back up the Modelink project with its own configuration",
+    "mutates": true,
+    "concurrency": "forbid"
+  },
+  {
+    "name": "project-specific/health-check-modelink",
+    "action": "project-specific/health-check-modelink.sh",
+    "group": "project-specific",
+    "summary": "Health-check the Modelink project",
+    "mutates": true,
+    "concurrency": "forbid"
+  },
+  {
+    "name": "security/advanced-threat-detection",
+    "action": "security/advanced-threat-detection.sh",
+    "group": "security",
+    "summary": "Run advanced threat detection and response",
+    "sudo": true,
+    "mutates": true,
+    "concurrency": "forbid"
+  },
+  {
+    "name": "security/api-security-hardening",
+    "action": "security/api-security-hardening.sh",
+    "group": "security",
+    "summary": "Harden the API surface",
+    "sudo": true,
+    "mutates": true,
+    "concurrency": "forbid"
+  },
+  {
+    "name": "security/docker-security-hardening",
+    "action": "security/docker-security-hardening.sh",
+    "group": "security",
+    "summary": "Harden Docker container security",
+    "sudo": true,
+    "mutates": true,
+    "concurrency": "forbid"
+  },
+  {
+    "name": "security/install-ids-ips",
+    "action": "security/install-ids-ips.sh",
+    "group": "security",
+    "summary": "Install and configure Suricata and OSSEC",
+    "sudo": true,
+    "mutates": true,
+    "concurrency": "forbid"
+  },
+  {
+    "name": "security/monitor-api-security",
+    "action": "security/monitor-api-security.sh",
+    "group": "security",
+    "summary": "Monitor API security events",
+    "sudo": true,
+    "mutates": true,
+    "concurrency": "forbid"
+  },
+  {
+    "name": "security/run-security-hardening",
+    "action": "security/run-security-hardening.sh",
+    "group": "security",
+    "summary": "Run every security job and report findings",
+    "sudo": true,
+    "mutates": true,
+    "concurrency": "forbid",
+    "replaces": [
+      "system:security-scan.service",
+      "user:security-scan.service"
+    ]
+  },
+  {
+    "name": "security/scan-dependencies",
+    "action": "security/scan-dependencies.sh",
+    "group": "security",
+    "summary": "Scan application dependencies for known vulnerabilities",
+    "sudo": true,
+    "mutates": true,
+    "concurrency": "forbid"
+  },
+  {
+    "name": "security/scan-docker-images",
+    "action": "security/scan-docker-images.sh",
+    "group": "security",
+    "summary": "Scan Docker images for known vulnerabilities",
+    "sudo": true,
+    "mutates": true,
+    "concurrency": "forbid"
+  },
+  {
+    "name": "security/security-integration",
+    "action": "security/security-integration.sh",
+    "group": "security",
+    "summary": "Wire all security features into one framework",
+    "sudo": true,
+    "mutates": true,
+    "concurrency": "forbid"
+  },
+  {
+    "name": "security/setup-rate-limiting",
+    "action": "security/setup-rate-limiting.sh",
+    "group": "security",
+    "summary": "Install fail2ban and configure API rate limiting",
+    "sudo": true,
+    "mutates": true,
+    "concurrency": "forbid"
+  },
+  {
+    "name": "setup-grafana-dashboards",
+    "action": "setup-grafana-dashboards.sh",
+    "group": "setup-grafana-dashboards",
+    "summary": "Install the Grafana dashboards",
+    "sudo": true,
+    "mutates": true
+  },
+  {
+    "name": "setup-notification-channels",
+    "action": "setup-notification-channels.sh",
+    "group": "setup-notification-channels",
+    "summary": "Configure Alertmanager notification channels and prove delivery",
+    "sudo": true,
+    "mutates": true
+  },
+  {
+    "name": "setup-prometheus-alerts",
+    "action": "setup-prometheus-alerts.sh",
+    "group": "setup-prometheus-alerts",
+    "summary": "Copy the Prometheus alert rules into the Prometheus container",
+    "sudo": true,
+    "mutates": true
+  }
+]
