@@ -71,14 +71,21 @@ def repo_root() -> Path:
 def actions_root() -> Path:
     """Where actions live: `$SPECTRE_ACTIONS_ROOT`, else `<repo>/scripts`.
 
-    Absolute, because every caller compares resolved paths against it. An empty
-    variable is treated as unset: `Path("")` resolves to the working directory,
-    which would make the whole checkout the actions root.
+    Absolute and fully resolved in *both* branches, because every caller compares
+    a resolved path against it. A checkout is free to make its actions directory
+    a symlink — which `<repo>/scripts` is allowed to be, and which
+    `<repo>/spectre/actions` will be after the repository merge — and comparing
+    against the unresolved root would refuse every job with "resolves outside the
+    actions root", naming a path that looks entirely legitimate. Resolving here
+    rather than at each call site means no caller can forget.
+
+    An empty variable is treated as unset: `Path("")` resolves to the working
+    directory, which would make the whole checkout the actions root.
     """
     configured = os.environ.get("SPECTRE_ACTIONS_ROOT")
     if configured:
         return Path(configured).resolve()
-    return repo_root() / "scripts"
+    return (repo_root() / "scripts").resolve()
 
 
 def _provenance(root: Path) -> tuple[str, bool]:
