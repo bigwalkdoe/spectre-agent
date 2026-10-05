@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from collections.abc import Coroutine
+from typing import Any, TypeVar
 
 from packages.core.event_bus import EventBus
 
+_T = TypeVar("_T")
 
-def _run(coro):
+
+def _run(coro: Coroutine[Any, Any, _T]) -> _T:
     """Run a coroutine in a new event loop."""
     loop = asyncio.new_event_loop()
     try:

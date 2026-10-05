@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+
 import httpx
 import pytest
 
@@ -17,7 +19,7 @@ def _api_key(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-async def client() -> httpx.AsyncClient:
+async def client() -> AsyncIterator[httpx.AsyncClient]:
     """Create an async test client that presents the API key."""
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
@@ -27,7 +29,7 @@ async def client() -> httpx.AsyncClient:
 
 
 @pytest.fixture
-async def anon_client() -> httpx.AsyncClient:
+async def anon_client() -> AsyncIterator[httpx.AsyncClient]:
     """Create an async test client with no API key."""
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -146,7 +147,7 @@ def test_service_bus_pubsub() -> None:
 def test_service_bus_unsubscribe() -> None:
     bus = ServiceBus()
 
-    def handler(data):
+    def handler(data: Any) -> None:
         pass
 
     bus.subscribe("test", handler)
@@ -196,28 +197,28 @@ def test_agent_accepts_context() -> None:
     ctx = AgentContext(service_bus=bus)
 
     class TestAgent(BaseAgent):
-        def initialize(self):
+        def initialize(self) -> None:
             pass
 
-        def plan(self):
+        def plan(self) -> list[str]:
             return []
 
-        def execute(self, plan):
+        def execute(self, plan: list[str]) -> dict[str, Any]:
             return {}
 
-        def observe(self):
+        def observe(self) -> dict[str, Any]:
             return {}
 
-        def verify(self):
+        def verify(self) -> bool:
             return True
 
-        def report(self, results):
+        def report(self, results: dict[str, Any]) -> str:
             return ""
 
-        def recover(self, error):
+        def recover(self, error: Exception) -> bool:
             return True
 
-        def shutdown(self):
+        def shutdown(self) -> None:
             pass
 
     agent = TestAgent("test", context=ctx)
