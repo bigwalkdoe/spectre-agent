@@ -66,7 +66,7 @@ def test_truncate_keeps_head_and_tail() -> None:
     assert got.startswith("A")
     assert got.endswith("A")
     assert "elided" in got
-    assert len(got) < 1000 + 200
+    assert len(got) <= 1000
 
 
 def test_truncate_is_a_noop_under_the_limit() -> None:
@@ -95,35 +95,56 @@ def test_truncate_with_no_room_returns_nothing() -> None:
 
 
 def test_truncate_marker_names_the_bytes_it_dropped() -> None:
-    """The marker is what makes the gap auditable, so it names a count a reader
-    can check against the original."""
-    got = truncate_output("A" * 300, limit=100)
-    assert got == "A" * 50 + "\n... [200 bytes elided] ...\n" + "A" * 50
+    """The marker is what makes the gap auditable, so its format and its count are
+    both pinned — and the whole result, marker included, fits the limit."""
+    limit = 100
+    marker = "\n... [246 bytes elided] ...\n"
+    got = truncate_output("A" * 300, limit=limit)
+    assert marker in got
+    assert got == "A" * 27 + marker + "A" * 27
+    assert len(got) <= limit
 
 
-def test_truncate_keeps_the_tail_when_the_limit_cannot_hold_the_marker() -> None:
-    """A limit below the marker's own width has no room for head + tail + marker.
-    The tail is kept alone rather than returning nothing: it is the end of the
-    run that says what went wrong."""
+def test_truncate_stays_within_its_limit_wherever_there_is_room_for_a_marker() -> None:
+    """The invariant: the result is at most `limit`. Below the width the marker
+    itself needs, no room is left for content on both sides, so the marker is
+    returned whole and the bound becomes `max(limit, len(marker) + 2)` — the gap
+    must be announced even when there is no room for what surrounds it."""
+    text = "A" * 5_000
+    floor = len("\n... [5000 bytes elided] ...\n") + 2
+    for limit in (1, 8, 29, 47, 48, 100, 1_000, OUTPUT_LIMIT):
+        got = truncate_output(text, limit=limit)
+        assert len(got) <= max(limit, floor), f"limit={limit} gave {len(got)}"
+    for limit in (48, 100, 1_000, OUTPUT_LIMIT):
+        assert len(truncate_output(text, limit=limit)) <= limit, f"limit={limit}"
+
+
+def test_truncate_returns_the_marker_alone_when_the_limit_cannot_hold_it() -> None:
+    """Too small for head + marker + tail: the marker wins. A record that silently
+    drops the notice that output was elided is the one outcome this function exists
+    to prevent, so the notice is kept and the surrounding output is not."""
     text = "H" * 500 + "EXIT-1-AT-THE-END"
-    got = truncate_output(text, limit=12)
-    assert got == text[-12:]
-    assert got.endswith("-END")
-    assert len(got) == 12
+    got = truncate_output(text, limit=8)
+    assert got == "\n... [517 bytes elided] ...\n"
+    assert "elided" in got
 
 
 def test_truncate_does_not_split_a_multibyte_character() -> None:
     """A byte budget rarely divides by the character width, so a cut lands inside a
     character. Half a character in a stored record is corruption, not truncation."""
     text = "→" * 1000  # three bytes each
+    total = len(text.encode())
     for limit in (300, 302):
         got = truncate_output(text, limit=limit)
         assert "�" not in got
         assert got.startswith("→")
         assert got.endswith("→")
-        assert got.count("→") == 100
-        # 100 whole arrows survive, so the marker names the other 2700 bytes.
-        assert "[2700 bytes elided]" in got
+        kept = got.count("→")
+        assert 0 < kept <= limit // 3
+        # Whatever survives is whole characters, so the marker accounts for exactly
+        # the rest of the bytes — a count taken at the cut points would overstate it.
+        assert f"[{total - kept * 3} bytes elided]" in got
+        assert len(got.encode()) <= limit
 
 
 def test_parse_payload_reads_trailing_fence() -> None:
@@ -218,8 +239,8 @@ def test_build_envelope_bounds_both_streams_and_reads_the_payload(tmp_path: Path
     assert got.payload == payload
     assert got.stdout_tail.endswith("```\n")
     assert got.stderr_tail.startswith("E") and got.stderr_tail.endswith("E")
-    assert len(got.stdout_tail) < OUTPUT_LIMIT + 100
-    assert len(got.stderr_tail) < OUTPUT_LIMIT + 100
+    assert len(got.stdout_tail) <= OUTPUT_LIMIT
+    assert len(got.stderr_tail) <= OUTPUT_LIMIT
 
 
 def test_build_envelope_keeps_a_missing_exit_code(tmp_path: Path) -> None:
