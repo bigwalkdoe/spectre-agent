@@ -29,7 +29,12 @@ jobs:
       - name: Ruff format check
         run: ruff format --check packages apps tests tools
       - name: Mypy type check
-        run: mypy packages apps tools --ignore-missing-imports
+        # `tests` is checked too, and it was missing for the same reason the
+        # dashboard JS check was: untyped test helpers nobody automated looked
+        # fine until `mypy` aborted on `Duplicate module named "conftest"` --
+        # which removed all 27 test files from checking silently, hiding 15 real
+        # `no-untyped-def` errors. It costs ~2 minutes, which this job already paid.
+        run: mypy packages apps tests tools --ignore-missing-imports
       - name: API docs match the code
         # Both AGENTS.md and README.md publish an endpoint table and an exact CLI
         # command count. Nothing checked them: the tables were missing `GET /`
