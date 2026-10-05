@@ -26,21 +26,18 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parent.parent
 OUT = REPO_ROOT / "packages" / "dispatch" / "registry_data.json"
 
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+# Imported, never mirrored: the entry schema lives in one place, so changing a
+# default there changes what this script omits.
+from packages.dispatch.registry import FIELD_DEFAULTS, REQUIRED_FIELDS  # noqa: E402
+
 SUITE_ROOT = Path(os.environ.get("SPECTRE_SUITE_ROOT", "/home/deon/dev/github/spectre-system-maintenance-suite"))
 SCRIPTS = SUITE_ROOT / "scripts"
 
 # The label-exec-context helper is a systemd glue script, not a dispatchable job.
 EXCLUDED = {"systemd/label-exec-context.sh"}
-
-# Load-time defaults, mirrored in packages/dispatch/registry.py.
-DEFAULTS: dict[str, Any] = {
-    "sudo": False,
-    "timeout": 1800,
-    "mutates": False,
-    "concurrency": "allow",
-    "schedule_hint": None,
-    "replaces": [],
-}
 
 # Verified host inventory: the crontab entries and systemd units each job
 # supersedes. A unit that was never installed on this host is deliberately
@@ -185,7 +182,7 @@ def build_entries(scripts: list[str]) -> list[dict[str, Any]]:
         if name not in SUMMARIES:
             raise ValueError(f"no summary for {name}")
 
-        values = {**DEFAULTS, **overrides_for(name)}
+        values = {**FIELD_DEFAULTS, **overrides_for(name)}
 
         replaces = REPLACES.get(name, [])
         hint = schedule_hint_for(replaces)
@@ -201,7 +198,7 @@ def build_entries(scripts: list[str]) -> list[dict[str, Any]]:
             "summary": SUMMARIES[name],
         }
         for key, value in values.items():
-            if value != DEFAULTS[key]:
+            if value != FIELD_DEFAULTS[key]:
                 entry[key] = value
         entries.append(entry)
 
@@ -226,7 +223,7 @@ def main() -> int:
 
     OUT.write_text(json.dumps(entries, indent=2) + "\n", encoding="utf-8")
 
-    deviating = sum(1 for entry in entries if len(entry) > 4)
+    deviating = sum(1 for entry in entries if len(entry) > len(REQUIRED_FIELDS))
     print(f"suite root:  {SUITE_ROOT}")
     print(f"wrote {len(entries)} jobs to {OUT}")
     print(f"  deviating from defaults: {deviating}")
