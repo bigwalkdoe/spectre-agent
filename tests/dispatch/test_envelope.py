@@ -18,6 +18,7 @@ from typing import Any
 
 from packages.dispatch.envelope import (
     OUTPUT_LIMIT,
+    PAYLOAD_LIMIT,
     Envelope,
     Status,
     build_envelope,
@@ -42,6 +43,11 @@ def _resolved(tmp_path: Path, **overrides: Any) -> ResolvedAction:
     }
     values.update(overrides)
     return ResolvedAction(**values)
+
+
+def _fenced(body: str) -> str:
+    """`body` as the trailing payload fence a script would print."""
+    return f"doing work\n```spectre\n{body}\n```\n"
 
 
 def test_status_comes_from_exit_code_not_output_text() -> None:
@@ -92,6 +98,21 @@ def test_truncate_with_no_room_returns_nothing() -> None:
     start" and would return the whole string."""
     assert truncate_output("A" * 100, limit=0) == ""
     assert truncate_output("A" * 100, limit=-1) == ""
+
+
+def test_truncate_keeps_the_actual_tail_not_a_second_head() -> None:
+    """The tail is the reason truncation is allowed at all: it carries the
+    exit-bearing lines. Both ends of the input differ, and one case puts them the
+    same distance from the middle, so neither a dropped tail nor a second head can
+    slip through — the all-`A` inputs elsewhere cannot tell head from tail."""
+    for filler in (5000, 5008):
+        text = "HEAD" + "x" * filler + "TAIL"
+        got = truncate_output(text, limit=1000)
+        assert got.startswith("HEAD")
+        assert got.endswith("TAIL")
+        # Whatever survived came from both ends, so the marker accounts for the rest.
+        kept = got.count("x") + len("HEAD") + len("TAIL")
+        assert f"[{len(text) - kept} bytes elided]" in got
 
 
 def test_truncate_marker_names_the_bytes_it_dropped() -> None:
@@ -179,6 +200,28 @@ def test_parse_payload_does_not_raise_on_pathological_json() -> None:
     assert parse_payload("```spectre\n" + "[" * 100_000 + "\n```\n") is None
 
 
+def test_parse_payload_keeps_a_payload_just_under_the_limit() -> None:
+    blob = "z" * (PAYLOAD_LIMIT - 64)
+    assert parse_payload(_fenced(json.dumps({"blob": blob}))) == {"blob": blob}
+
+
+def test_parse_payload_drops_a_payload_over_the_limit() -> None:
+    """Half a JSON object is not a payload, so an oversized one is dropped whole
+    rather than truncated into something unparseable."""
+    blob = "z" * PAYLOAD_LIMIT
+    assert parse_payload(_fenced(json.dumps({"blob": blob}))) is None
+
+
+def test_parse_payload_loses_a_payload_containing_a_line_separator() -> None:
+    """`str.splitlines()` breaks on U+2028 as well as on newlines, and the JSON
+    decoder accepts that character raw inside a string. The payload is lost, not the
+    run — the documented cost of finding the fence by scanning lines."""
+    separator = "\u2028"
+    body = f'{{"note": "a{separator}b"}}'
+    assert json.loads(body) == {"note": f"a{separator}b"}
+    assert parse_payload(_fenced(body)) is None
+
+
 def test_envelope_is_immutable() -> None:
     e = Envelope(
         job="backups/backup-all",
@@ -241,6 +284,29 @@ def test_build_envelope_bounds_both_streams_and_reads_the_payload(tmp_path: Path
     assert got.stderr_tail.startswith("E") and got.stderr_tail.endswith("E")
     assert len(got.stdout_tail) <= OUTPUT_LIMIT
     assert len(got.stderr_tail) <= OUTPUT_LIMIT
+
+
+def test_build_envelope_drops_an_oversized_payload_but_keeps_the_run(tmp_path: Path) -> None:
+    """An oversized payload must not make this the one unbounded field in a record
+    every other field of is bounded. Dropping it still loses nothing silently: the
+    exit code decides the status, and the fence is still there in the tail for an
+    operator to see."""
+    stdout = "working\n" + "x" * 200_000 + "\n```spectre\n" + json.dumps({"blob": "z" * PAYLOAD_LIMIT}) + "\n```\n"
+    got = build_envelope(
+        _resolved(tmp_path),
+        trigger="cli",
+        started_at=_STARTED,
+        duration_ms=5,
+        exit_code=0,
+        stdout=stdout,
+        stderr="",
+        status=status_for_exit_code(0),
+    )
+    assert got.payload is None
+    assert got.status is Status.SUCCESS
+    assert got.exit_code == 0
+    assert got.stdout_tail.endswith("```\n")
+    assert len(got.stdout_tail) <= OUTPUT_LIMIT
 
 
 def test_build_envelope_keeps_a_missing_exit_code(tmp_path: Path) -> None:

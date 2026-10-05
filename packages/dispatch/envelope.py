@@ -16,8 +16,9 @@ A script may also report structured data by ending its stdout with a
 ` ```spectre ` fenced JSON object. The fence must be last, because a fence
 followed by prose is a code block someone quoted rather than a payload — and
 treating it as one would let ordinary output shape a record. A payload that is
-absent, misplaced, not an object or not valid JSON is not an error: the run still
-happened, and discarding it would be a worse lie than a record without one.
+absent, misplaced, not an object, not valid JSON or simply too large is not an
+error: the run still happened, and discarding the payload would be a worse lie
+than a record without one — the fence is still there in the tail to be read.
 """
 
 from __future__ import annotations
@@ -34,6 +35,10 @@ from packages.dispatch.resolve import ResolvedAction
 # human reads — a stack trace, a failing command, a diffstat — and the exporters
 # that overrun it are still fully diagnosable from their tail.
 OUTPUT_LIMIT = 65536
+
+# Bytes of JSON in a payload. The same bound as a stream, so a record's payload is
+# no bigger than its output and Task 6 can size one column instead of guessing.
+PAYLOAD_LIMIT = OUTPUT_LIMIT
 
 # The fence a payload arrives in, and the fence that must close it last.
 _FENCE_OPEN = "```spectre"
@@ -100,10 +105,11 @@ def _marker(elided: int) -> str:
 
 
 # An upper bound on any marker, derived from the format itself so it cannot drift
-# from it. Twenty digits is a byte count no host can emit. `truncate_output` budgets
-# the content against *this* rather than against the count it will print, which it
-# cannot know until it has sliced: budgeting the widest marker makes the bound
-# provable in one pass, at the cost of a few bytes of tail.
+# from it: 10**20 is 21 digits, which no host can emit, so this is as wide as a
+# marker gets. `truncate_output` budgets the content against *this* rather than
+# against the count it will print, which it cannot know until it has sliced:
+# reserving the widest marker makes the bound provable in one pass, at the cost of a
+# few bytes of tail.
 _MAX_MARKER_LEN = len(_marker(10**20))
 
 
@@ -128,6 +134,10 @@ def truncate_output(text: str, limit: int = OUTPUT_LIMIT) -> str:
     output was elided is the one outcome this function exists to prevent. So the
     result is at most `max(limit, len(marker) + 2)` — exactly `limit` for any limit
     that can hold the marker at all.
+
+    A non-positive `limit` is the one budget that gets nothing at all, not even the
+    marker: it is a caller asking for no output, and returning the notice would
+    return more than was asked for. Every limit from 1 up gets at least the notice.
 
     The *tail* is never dropped where there is room for it, because that is where a
     failure states itself.
@@ -166,6 +176,15 @@ def parse_payload(stdout: str) -> dict[str, Any] | None:
     not take down the record of a run that actually happened. The fence must be
     the final non-empty content, so quoted code blocks and trailing prose cannot
     inject one.
+
+    A payload larger than `PAYLOAD_LIMIT` is dropped whole rather than truncated,
+    because half a JSON object is not a payload and the run is still recorded by its
+    exit code either way — the fence is still in the tail for an operator to read.
+
+    One cost of finding the fence by scanning lines: `str.splitlines()` also breaks
+    on `\\v \\f \\x1c \\x1d \\x1e \\x85` and U+2028/U+2029, and the JSON decoder
+    accepts those raw inside a string, so a payload containing one is lost. A loss,
+    never a crash, and never the run itself.
     """
     lines = stdout.splitlines()
 
@@ -183,8 +202,12 @@ def parse_payload(stdout: str) -> dict[str, Any] | None:
     if first < 0:
         return None
 
+    body = "\n".join(lines[first + 1 : last])
+    if _byte_len(body) > PAYLOAD_LIMIT:
+        return None
+
     try:
-        decoded = json.loads("\n".join(lines[first + 1 : last]))
+        decoded = json.loads(body)
     # RecursionError is json's own overflow on deeply nested untrusted text, and
     # belongs to "unparseable" for the same reason JSONDecodeError does.
     except (ValueError, RecursionError):
@@ -205,8 +228,9 @@ def build_envelope(
     """The record of one finished run.
 
     The single way to build an `Envelope`, so a caller cannot store unbounded
-    output or skip payload parsing by assembling the fields itself. Both streams
-    are bounded and the payload is read here; nothing else is decided.
+    output or skip payload parsing by assembling the fields itself. Every text field
+    is bounded — both streams by `OUTPUT_LIMIT`, the payload by `PAYLOAD_LIMIT` — so
+    no single field can inflate a record past what the store sized for it.
     """
     return Envelope(
         job=resolved.job.name,
