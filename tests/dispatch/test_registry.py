@@ -42,9 +42,7 @@ def test_get_job_raises_for_unknown() -> None:
 
 def test_jobs_in_group_and_groups_agree() -> None:
     assert set(groups()) == {j.group for j in JOBS}
-    assert jobs_in_group("backups") == sorted(
-        (j for j in JOBS if j.group == "backups"), key=lambda j: j.name
-    )
+    assert jobs_in_group("backups") == sorted((j for j in JOBS if j.group == "backups"), key=lambda j: j.name)
 
 
 def test_pinned_values() -> None:
@@ -101,6 +99,14 @@ def test_jobs_without_a_superseded_scheduler_are_manual() -> None:
     j = get_job("maintenance/compliance-report")
     assert j.replaces == []
     assert j.schedule_hint is None
+
+
+def test_scheduled_database_vacuum_is_protected() -> None:
+    """VACUUM/ANALYZE is destructive. The plan's override table omitted this job,
+    so it is pinned here rather than left to a table that could shrink again."""
+    j = get_job("maintenance/vacuum-databases")
+    assert j.mutates is True
+    assert j.concurrency == "forbid"
 
 
 def test_jobs_are_frozen() -> None:

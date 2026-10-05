@@ -283,6 +283,8 @@
     "action": "maintenance/vacuum-databases.sh",
     "group": "maintenance",
     "summary": "Vacuum and analyze PostgreSQL databases",
+    "mutates": true,
+    "concurrency": "forbid",
     "schedule_hint": "30 2 * * *",
     "replaces": [
       "crontab:30 2 * * *"
