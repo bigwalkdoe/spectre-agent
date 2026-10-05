@@ -1,0 +1,220 @@
+"""The record one dispatch produces: what ran, from where, and at which commit.
+
+An envelope is the only durable evidence a maintenance suite leaves, so it is
+built in one place — `build_envelope` — rather than assembled field by field by
+each caller. Two of its fields are bounded, and that bounding is the reason this
+module exists.
+
+Output is truncated, never rejected. A script that emits more than `OUTPUT_LIMIT`
+is running, not misbehaving: the two five-minute Prometheus exporters alone
+exceed it. Both ends are kept because the head says what the run was doing and
+the *tail* is where a failure states itself — a record that kept only the head
+would report every overrun as a silent success. The marker between them names how
+many bytes went missing, so the gap is greppable instead of merely shorter.
+
+A script may also report structured data by ending its stdout with a
+` ```spectre ` fenced JSON object. The fence must be last, because a fence
+followed by prose is a code block someone quoted rather than a payload — and
+treating it as one would let ordinary output shape a record. A payload that is
+absent, misplaced, not an object or not valid JSON is not an error: the run still
+happened, and discarding it would be a worse lie than a record without one.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from datetime import datetime
+from enum import StrEnum
+from typing import Any
+
+from packages.dispatch.resolve import ResolvedAction
+
+# Bytes of each stream kept in a record. Sixty-four KiB holds any diagnostic a
+# human reads — a stack trace, a failing command, a diffstat — and the exporters
+# that overrun it are still fully diagnosable from their tail.
+OUTPUT_LIMIT = 65536
+
+# The fence a payload arrives in, and the fence that must close it last.
+_FENCE_OPEN = "```spectre"
+_FENCE_CLOSE = "```"
+
+
+class Status(StrEnum):
+    """How a run ended.
+
+    A string enum whose value is the lowercase word, because the value is the
+    contract: the store writes `status.value` and the CLI compares against it, so
+    renaming a member must not change a stored record's meaning. Only SUCCESS and
+    FAILED come from an exit code; TIMEOUT, MISSING and REFUSED are the ways a
+    run ends without ever reaching an exit code.
+
+    `StrEnum` rather than `str, Enum` — the latter is deprecated by the `UP` lint
+    rules, and it also renders as `Status.SUCCESS` inside an f-string, where a
+    status printed into a record or a log line should read `success`.
+    """
+
+    SUCCESS = "success"
+    FAILED = "failed"
+    TIMEOUT = "timeout"
+    MISSING = "missing"
+    REFUSED = "refused"
+
+
+@dataclass(frozen=True)
+class Envelope:
+    """What one dispatch did, in a form that can be stored and compared.
+
+    The job is its name rather than the `Job` it came from: a record outlives the
+    registry entry, and one that held the object would be rewritten every time a
+    field was added to the registry.
+    """
+
+    job: str
+    trigger: str
+    started_at: datetime
+    duration_ms: int
+    exit_code: int | None
+    resolved_path: str
+    git_commit: str
+    git_dirty: bool
+    stdout_tail: str
+    stderr_tail: str
+    status: Status
+    payload: dict[str, Any] | None
+
+
+def status_for_exit_code(code: int) -> Status:
+    """SUCCESS for zero, FAILED for everything else.
+
+    From the exit code alone: a script may print `error` and exit 0, or print
+    nothing and exit 1, and reading the verdict out of the text would let either
+    one lie.
+    """
+    return Status.SUCCESS if code == 0 else Status.FAILED
+
+
+def _marker(elided: int) -> str:
+    """The line that stands in for the bytes dropped from the middle."""
+    return f"\n... [{elided} bytes elided] ...\n"
+
+
+# An upper bound on any marker, so `truncate_output` can tell whether a limit has
+# room for one before the count it will name — and therefore the marker itself —
+# is known. Twenty digits is a byte count no host can emit.
+_MAX_MARKER_LEN = len(_marker(10**20))
+
+
+def _byte_len(text: str) -> int:
+    """How many bytes `text` occupies encoded, which is the unit bounded here.
+
+    Encoded the same way `truncate_output` encodes, so the count cannot disagree
+    with what is kept — invalid bytes are dropped rather than raising, because
+    this module's contract is to bound whatever a script wrote, including output
+    that is not valid text.
+    """
+    return len(text.encode("utf-8", "ignore"))
+
+
+def truncate_output(text: str, limit: int = OUTPUT_LIMIT) -> str:
+    """`text` bounded to `limit` bytes, head and tail kept around an elision marker.
+
+    The result is at most `limit` bytes plus the marker, and the marker names how
+    many bytes are missing. The *tail* is never dropped, because that is where a
+    failure states itself.
+
+    Slicing is by bytes, since a limit is a size on disk and the marker counts
+    bytes: a cut that lands inside a multi-byte character drops the partial bytes
+    and the character is dropped whole, so a stored record never carries half a
+    one. A limit too small to hold head + marker + tail cannot carry the marker at
+    all, and then the tail is kept alone — the alternative, a truncated marker,
+    would make the gap ungreppable, which is the one thing the marker exists to
+    prevent.
+    """
+    if limit <= 0:
+        return ""
+    data = text.encode("utf-8", "ignore")
+    if len(data) <= limit:
+        return text
+
+    # Checked before slicing: with no room for a marker, a half-and-half split has
+    # nothing to put between the halves, and `data[-0:]` would be the whole
+    # string rather than the empty one a zero-width slice should give.
+    if limit <= _MAX_MARKER_LEN:
+        return data[-limit:].decode("utf-8", "ignore")
+
+    per_side = limit // 2
+    head = data[:per_side].decode("utf-8", "ignore")
+    tail = data[-per_side:].decode("utf-8", "ignore")
+    # Counted from what survives rather than from the cut points, so a cut inside a
+    # multi-byte character cannot make the marker overstate what is still shown.
+    elided = len(data) - _byte_len(head) - _byte_len(tail)
+    return f"{head}{_marker(elided)}{tail}"
+
+
+def parse_payload(stdout: str) -> dict[str, Any] | None:
+    """The JSON object in a trailing ` ```spectre ` fence, or None.
+
+    None for absent, misplaced, non-object and unparseable fences alike, and it
+    never raises: a payload is an optional extra, and one that cannot be read must
+    not take down the record of a run that actually happened. The fence must be
+    the final non-empty content, so quoted code blocks and trailing prose cannot
+    inject one.
+    """
+    lines = stdout.splitlines()
+
+    last = len(lines) - 1
+    while last >= 0 and not lines[last].strip():
+        last -= 1
+    if last < 0 or lines[last].strip() != _FENCE_CLOSE:
+        return None
+
+    first = -1
+    for index in range(last - 1, -1, -1):
+        if lines[index].strip() == _FENCE_OPEN:
+            first = index
+            break
+    if first < 0:
+        return None
+
+    try:
+        decoded = json.loads("\n".join(lines[first + 1 : last]))
+    # RecursionError is json's own overflow on deeply nested untrusted text, and
+    # belongs to "unparseable" for the same reason JSONDecodeError does.
+    except (ValueError, RecursionError):
+        return None
+    return decoded if isinstance(decoded, dict) else None
+
+
+def build_envelope(
+    resolved: ResolvedAction,
+    trigger: str,
+    started_at: datetime,
+    duration_ms: int,
+    exit_code: int | None,
+    stdout: str,
+    stderr: str,
+    status: Status,
+) -> Envelope:
+    """The record of one finished run.
+
+    The single way to build an `Envelope`, so a caller cannot store unbounded
+    output or skip payload parsing by assembling the fields itself. Both streams
+    are bounded and the payload is read here; nothing else is decided.
+    """
+    return Envelope(
+        job=resolved.job.name,
+        trigger=trigger,
+        started_at=started_at,
+        duration_ms=duration_ms,
+        exit_code=exit_code,
+        resolved_path=str(resolved.path),
+        git_commit=resolved.git_commit,
+        git_dirty=resolved.git_dirty,
+        stdout_tail=truncate_output(stdout),
+        stderr_tail=truncate_output(stderr),
+        status=status,
+        # Read from the whole stdout, not the tail: bounding what is *stored* must
+        # not lose what the run actually emitted.
+        payload=parse_payload(stdout),
+    )
