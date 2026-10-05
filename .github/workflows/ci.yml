@@ -25,11 +25,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
       - name: Ruff lint
-        run: ruff check packages apps tests
+        run: ruff check packages apps tests tools
       - name: Ruff format check
-        run: ruff format --check packages apps tests
+        run: ruff format --check packages apps tests tools
       - name: Mypy type check
-        run: mypy packages apps --ignore-missing-imports
+        run: mypy packages apps tools --ignore-missing-imports
       - name: API docs match the code
         # Both AGENTS.md and README.md publish an endpoint table and an exact CLI
         # command count. Nothing checked them: the tables were missing `GET /`
