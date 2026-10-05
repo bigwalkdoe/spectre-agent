@@ -99,9 +99,11 @@ def _marker(elided: int) -> str:
     return f"\n... [{elided} bytes elided] ...\n"
 
 
-# An upper bound on any marker, so `truncate_output` can tell whether a limit has
-# room for one before the count it will name — and therefore the marker itself —
-# is known. Twenty digits is a byte count no host can emit.
+# An upper bound on any marker, derived from the format itself so it cannot drift
+# from it. Twenty digits is a byte count no host can emit. `truncate_output` budgets
+# the content against *this* rather than against the count it will print, which it
+# cannot know until it has sliced: budgeting the widest marker makes the bound
+# provable in one pass, at the cost of a few bytes of tail.
 _MAX_MARKER_LEN = len(_marker(10**20))
 
 
@@ -119,17 +121,20 @@ def _byte_len(text: str) -> int:
 def truncate_output(text: str, limit: int = OUTPUT_LIMIT) -> str:
     """`text` bounded to `limit` bytes, head and tail kept around an elision marker.
 
-    The result is at most `limit` bytes plus the marker, and the marker names how
-    many bytes are missing. The *tail* is never dropped, because that is where a
+    The marker is inside the budget, so the result is at most `limit` bytes and the
+    limit is a bound a column can be trusted to hold. The one floor on that claim is
+    a limit too small for head + marker + tail at all: there the marker is returned
+    whole and nothing else, because a record that silently drops the notice that
+    output was elided is the one outcome this function exists to prevent. So the
+    result is at most `max(limit, len(marker) + 2)` — exactly `limit` for any limit
+    that can hold the marker at all.
+
+    The *tail* is never dropped where there is room for it, because that is where a
     failure states itself.
 
-    Slicing is by bytes, since a limit is a size on disk and the marker counts
-    bytes: a cut that lands inside a multi-byte character drops the partial bytes
-    and the character is dropped whole, so a stored record never carries half a
-    one. A limit too small to hold head + marker + tail cannot carry the marker at
-    all, and then the tail is kept alone — the alternative, a truncated marker,
-    would make the gap ungreppable, which is the one thing the marker exists to
-    prevent.
+    Slicing is by bytes, since a limit is a size on disk and the marker counts bytes:
+    a cut that lands inside a multi-byte character drops the partial bytes and the
+    character is dropped whole, so a stored record never carries half a one.
     """
     if limit <= 0:
         return ""
@@ -137,13 +142,14 @@ def truncate_output(text: str, limit: int = OUTPUT_LIMIT) -> str:
     if len(data) <= limit:
         return text
 
-    # Checked before slicing: with no room for a marker, a half-and-half split has
-    # nothing to put between the halves, and `data[-0:]` would be the whole
-    # string rather than the empty one a zero-width slice should give.
-    if limit <= _MAX_MARKER_LEN:
-        return data[-limit:].decode("utf-8", "ignore")
+    # The marker comes out of the budget before the content does, so `per_side` is
+    # what is left after reserving room for the widest marker. Decided before any
+    # slicing: with no room for a byte on each side there is nothing to put the
+    # marker between, and a zero-width slice would be the whole string, not empty.
+    per_side = (limit - _MAX_MARKER_LEN) // 2
+    if per_side < 1:
+        return _marker(len(data))
 
-    per_side = limit // 2
     head = data[:per_side].decode("utf-8", "ignore")
     tail = data[-per_side:].decode("utf-8", "ignore")
     # Counted from what survives rather than from the cut points, so a cut inside a
