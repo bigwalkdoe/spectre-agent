@@ -177,15 +177,43 @@ def _reader(stream: IO[str], sink: _BoundedOutput) -> threading.Thread:
     return threading.Thread(target=_pump, args=(stream, sink), daemon=True)
 
 
-def _signal_group(proc: subprocess.Popen[str], sig: signal.Signals, grace: float) -> bool:
+def _group_is_gone(pgid: int) -> bool:
+    """Whether the action's process group has no members left.
+
+    Signal 0 asks the kernel whether the group exists and delivers nothing, which
+    is the only way to ask about a group this process will not reap. `wait` answers
+    a narrower question — *is the child gone* — and the child going is not the group
+    going. An action that traps SIGTERM and exits, leaving a grandchild that
+    ignores SIGTERM, is the case that matters: `wait` returned, the timeout was
+    recorded, and the work the scheduler believed it had stopped kept running.
+
+    A permission error is not evidence the group is gone, and escalating is the safe
+    direction to be wrong in: a SIGKILL that reaches nothing costs one grace period.
+    """
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return True
+    except OSError:
+        return False
+    return False
+
+
+def _signal_group(proc: subprocess.Popen[str], pgid: int, sig: signal.Signals, grace: float) -> bool:
     """Signal the action's whole process group, then wait out `grace` for it.
 
-    True once the action is gone, false if it is still running. The group is
-    signalled rather than the child so that everything the action started stops
-    with it; only the child is waited for, since the rest of the group is not this
-    process's to reap.
+    True once the *group* is gone, false if anything in it is still running. The
+    group is signalled rather than the child so that everything the action started
+    stops with it, and the answer is about the group rather than the child: only
+    the child is waited for, since the rest of the group is not this process's to
+    reap, and its exit says nothing about its siblings.
+
+    `pgid` is passed in rather than read here because the escalation calls this
+    twice, and the first call's `wait` reaps the child — a second `getpgid` on a
+    reaped pid raises. One group for both rounds is also the correct answer: a
+    process cannot leave its group without the group ceasing to be the one to
+    signal.
     """
-    pgid = os.getpgid(proc.pid)
     # The action is spawned into its own session, so its group is never this
     # process's — but that is a fact about the call to `Popen` and not about this
     # function, and the two are edited apart. Were it ever false, `killpg` would
@@ -203,8 +231,12 @@ def _signal_group(proc: subprocess.Popen[str], sig: signal.Signals, grace: float
     try:
         proc.wait(timeout=grace)
     except subprocess.TimeoutExpired:
-        return False
-    return True
+        pass
+    # Reached in both cases. Reaping the child through `wait` is what makes the
+    # group answer trustworthy — a zombie child is still a member — and in the
+    # timeout case the child is deliberately still there, so this correctly reports
+    # "not gone" and lets the caller escalate.
+    return not whole_group or _group_is_gone(pgid)
 
 
 def _stop(proc: subprocess.Popen[str]) -> None:
@@ -213,10 +245,27 @@ def _stop(proc: subprocess.Popen[str]) -> None:
     Every path ends in a `wait` that returns, so the child is reaped rather than
     left as a zombie for the next timeout to add to — SIGKILL cannot be ignored,
     which is what makes that true of the second path too.
+
+    **The escalation is decided by the group, not by the child.** An action that
+    traps SIGTERM and then exits — a cleanup handler that runs and returns, say —
+    takes its direct child with it while leaving a grandchild that ignores SIGTERM
+    running. Judged by the child, that looks like a clean stop: no SIGKILL, the
+    timeout recorded, and the work the scheduler believed it had stopped carrying
+    on unobserved, which is the exact outcome this module exists to prevent. So
+    after SIGTERM the group is asked whether anything in it is left, and SIGKILL
+    goes to the whole group if the answer is yes.
     """
-    if _signal_group(proc, signal.SIGTERM, _TERM_GRACE_SECONDS):
+    try:
+        pgid = os.getpgid(proc.pid)
+    except OSError:
+        # It exited between the deadline and here, so there is no process left to
+        # signal. Reap it and leave the record as the timeout it already is —
+        # nothing can be done about work that has finished on its own.
+        proc.wait()
         return
-    _signal_group(proc, signal.SIGKILL, _TERM_GRACE_SECONDS)
+    if _signal_group(proc, pgid, signal.SIGTERM, _TERM_GRACE_SECONDS):
+        return
+    _signal_group(proc, pgid, signal.SIGKILL, _TERM_GRACE_SECONDS)
 
 
 def run_action(
