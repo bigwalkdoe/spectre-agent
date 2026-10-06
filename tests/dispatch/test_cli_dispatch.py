@@ -44,7 +44,14 @@ from sqlmodel import Session, SQLModel, create_engine
 from typer.testing import CliRunner
 
 import apps.cli.dispatch_cmds as dispatch_cmds
-from apps.cli.dispatch_cmds import EXIT_FAILED, EXIT_LOCKED, EXIT_NOT_DISPATCHABLE, EXIT_OK, EXIT_UNKNOWN_JOB
+from apps.cli.dispatch_cmds import (
+    EXIT_FAILED,
+    EXIT_LOCKED,
+    EXIT_NOT_DISPATCHABLE,
+    EXIT_OK,
+    EXIT_UNKNOWN_JOB,
+    EXIT_USAGE,
+)
 from apps.cli.main import app
 from packages.dispatch import registry, retention
 from packages.dispatch.lock import lock_path
@@ -391,12 +398,91 @@ def test_run_records_a_real_commit_when_actions_are_a_repo(actions: Path) -> Non
 
 
 def test_run_forwards_arguments(actions: Path) -> None:
-    """Arguments after the job go to the action and are not parsed as spectre's
-    own options — `--dry-run` is the action's flag, not spectre's."""
+    """Arguments after the job go to the action, once `--` says so.
+
+    `--dry-run` is the action's flag, not spectre's, and `--` is how that is
+    written. Pinned as the positive half of the pair below: forwarding works, and
+    forwarding is not what happens without the `--`.
+    """
     _write(actions, "backups/backup-all.sh", '#!/bin/bash\necho "a=$1"\n')
     result = runner.invoke(app, ["run", JOB, "--", "--dry-run"])
     assert result.exit_code == 0
     assert "a=--dry-run" in result.stdout
+
+
+def test_run_refuses_an_unknown_option_rather_than_forwarding_it(actions: Path) -> None:
+    """`--dry-run` without `--` is spectre's error, not the action's argument.
+
+    Forwarding it silently was the defect: with `ignore_unknown_options` set,
+    `spectre run maintenance/cleanup-cache --dry-run` ran the destructive path and
+    reported `success in 5ms (exit 0)`. 45 of the 61 jobs mutate and 21 need root,
+    and an operator's reflex before a destructive action is precisely to type the
+    flag and hope — so a flag meant for spectre must not be able to arrive as the
+    action's by accident.
+
+    The action here is the check on the assertion: it writes a marker and exits
+    non-zero, so a forwarding implementation fails on the output *and* on the exit
+    code rather than passing for the wrong reason.
+    """
+    marker = actions / "ran-anyway.txt"
+    _write(
+        actions,
+        "backups/backup-all.sh",
+        f'#!/bin/bash\ntouch {marker}\necho "got=$*"\nexit 7\n',
+    )
+
+    result = runner.invoke(app, ["run", JOB, "--dry-run"])
+
+    assert not marker.exists(), "the action ran despite the refused option"
+    assert "got=" not in result.stdout
+    assert "no such option for spectre run: --dry-run" in result.stdout
+    # And it says how to forward it, because a refusal an operator cannot act on is
+    # the same wall with better manners.
+    assert "spectre run <job> -- --dry-run" in result.stdout
+
+
+def test_a_refused_option_exits_usage_and_not_unknown_job(actions: Path) -> None:
+    """Exit 64, so a usage error is never read as "no such job".
+
+    Click's own code for a usage error is 2, which this module already spends on an
+    unknown job name. Reusing it would make a typo and a missing job the same
+    number, and 64 is outside every code in the dispatch table — so nothing here
+    has to be disambiguated.
+    """
+    result = runner.invoke(app, ["run", JOB, "--dry-run"])
+
+    assert result.exit_code == EXIT_USAGE
+    assert result.exit_code == 64
+    assert result.exit_code != EXIT_UNKNOWN_JOB
+
+
+def test_a_flag_after_a_bare_argument_is_refused_too(actions: Path) -> None:
+    """The refusal is not order-dependent: `spectre run <job> extra --flag` is the
+    same mistake as `spectre run <job> --flag`, and both must stop before dispatch.
+
+    Stated because `allow_extra_args` collects bare words and nothing else — the
+    point of the test is that an unrecognised *option* is refused wherever it
+    appears, which is what makes `--` the only way to pass one.
+    """
+    _write(actions, "backups/backup-all.sh", '#!/bin/bash\necho "got=$*"\nexit 7\n')
+
+    result = runner.invoke(app, ["run", JOB, "extra", "--flag"])
+
+    assert result.exit_code == 64
+    assert "got=" not in result.stdout
+
+
+def test_run_help_documents_the_double_dash(actions: Path) -> None:
+    """The disambiguator is in `--help`, not only in a Python comment.
+
+    It used to exist only in a comment above the command, which is the one place an
+    operator never looks — and `spectre run --help` documented neither the
+    forwarding nor the `--`.
+    """
+    result = runner.invoke(app, ["run", "--help"])
+
+    assert result.exit_code == 0
+    assert "--" in result.stdout
 
 
 def test_run_does_not_interpret_action_output_as_markup(actions: Path) -> None:
@@ -611,12 +697,18 @@ def test_the_exit_code_constants_are_the_documented_ones() -> None:
     code came out; this is what stops the six being renumbered while the tests still
     pass — a `0` that became `1` would otherwise be indistinguishable from `main.py`'s
     catch-all.
+
+    `EXIT_USAGE` is included, and pinned *outside* the other six rather than merely
+    named: it is the only code meaning "nothing ran and nothing was refused", and it
+    is the one a collision with `EXIT_UNKNOWN_JOB` would silently absorb.
     """
     assert EXIT_OK == 0
     assert EXIT_UNKNOWN_JOB == 2
     assert EXIT_NOT_DISPATCHABLE == 3
     assert EXIT_LOCKED == 4
     assert EXIT_FAILED == 5
+    assert EXIT_USAGE == 64
+    assert EXIT_USAGE not in (EXIT_OK, EXIT_UNKNOWN_JOB, EXIT_NOT_DISPATCHABLE, EXIT_LOCKED, EXIT_FAILED)
 
 
 def test_run_refuses_a_sudo_job_without_recording_a_run(actions: Path, monkeypatch: pytest.MonkeyPatch) -> None:
