@@ -9,7 +9,7 @@ succeeded — which is exactly the record that cannot be diagnosed after the fac
 
 That is also why the migration is the interesting half. The live
 `~/.config/spectre/memory.db` is 28 MB with 140,385 rows and this repo has no Alembic,
-so declaring the six columns is not enough: `SQLModel.metadata.create_all()` does not
+so declaring the seven columns is not enough: `SQLModel.metadata.create_all()` does not
 alter an existing table, and every query against the host's database would then raise
 `OperationalError: no such column: maintenancerecord.trigger`. `ensure_schema` exists
 to add them, and the properties that matter are that it adds them to a table it did not
@@ -27,12 +27,14 @@ import json
 import sqlite3
 import threading
 from collections import Counter
-from contextlib import closing
-from datetime import UTC, datetime
+from collections.abc import Callable, Iterator
+from contextlib import closing, contextmanager
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import pytest
+from sqlmodel import Session, select
 
 from packages.dispatch.envelope import Envelope, Status
 from packages.memory import db as db_module
@@ -82,11 +84,12 @@ def _env(
     trigger: str = "cron",
     exit_code: int | None = 0,
     payload: dict[str, Any] | None = _DEFAULT_PAYLOAD,
+    started_at: datetime | None = None,
 ) -> Envelope:
     return Envelope(
         job=job,
         trigger=trigger,
-        started_at=datetime.now(UTC),
+        started_at=started_at if started_at is not None else datetime.now(UTC),
         duration_ms=5,
         exit_code=exit_code,
         resolved_path="/x/backup-all.sh",
@@ -144,6 +147,67 @@ def _columns(db: Path) -> set[str]:
         return {row[1] for row in con.execute("PRAGMA table_info(maintenancerecord)")}
 
 
+def _indexes(db: Path) -> set[str]:
+    with closing(sqlite3.connect(db)) as con:
+        return {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
+
+
+def _incidents(rule_id: str, resolved: bool = False) -> list[SecurityIncident]:
+    return [i for i in get_security_incidents(resolved=resolved, limit=200) if i.rule_id == rule_id]
+
+
+def _resolve(rule_id: str) -> None:
+    """Mark a rule's rows resolved, as an operator closing an incident would."""
+    with Session(db_module.engine) as session:
+        for row in session.exec(select(SecurityIncident).where(SecurityIncident.rule_id == rule_id)).all():
+            row.resolved = True
+        session.commit()
+
+
+class _ScriptedConnection:
+    """A real SQLite connection with the outcome of its first `ALTER` replaced.
+
+    The migration reads the column list and only then issues each `ALTER`, so both
+    the "another process migrated this in between" case and the "the database is
+    unavailable" case live entirely inside that gap — a window no test can reach from
+    outside. Substituting the connection is how either is produced deterministically
+    rather than by timing. Everything else, including the `PRAGMA table_info` read the
+    migration bases its decision on, is the real connection doing real work.
+    """
+
+    def __init__(self, real: sqlite3.Connection, before_alter: Callable[[sqlite3.Connection], None]) -> None:
+        self._real = real
+        self._before_alter = before_alter
+        self._armed = True
+
+    def execute(self, sql: str) -> sqlite3.Cursor:
+        if sql.startswith("ALTER TABLE") and self._armed:
+            self._armed = False
+            self._before_alter(self._real)
+        return self._real.execute(sql)
+
+    def commit(self) -> None:
+        self._real.commit()
+
+    def close(self) -> None:
+        self._real.close()
+
+
+@contextmanager
+def _scripted_connection(
+    monkeypatch: pytest.MonkeyPatch, before_alter: Callable[[sqlite3.Connection], None]
+) -> Iterator[None]:
+    """Hand `ensure_schema` the scripted connection for the length of the block."""
+    real = sqlite3.connect
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            db_module.sqlite3,
+            "connect",
+            lambda target: _ScriptedConnection(real(target), before_alter),
+        )
+        yield
+
+
 # ── the records ──────────────────────────────────────────────────────────────
 
 
@@ -193,6 +257,31 @@ def test_save_run_round_trips_the_stderr_tail() -> None:
 def test_a_run_with_no_payload_stores_none() -> None:
     rid = save_run(_env(payload=None))
     assert next(r for r in recent_runs(limit=10) if r.id == rid).payload is None
+
+
+def test_a_payload_json_cannot_encode_still_gets_a_record() -> None:
+    """The payload is optional extra; the fact that the run happened is not.
+
+    A `datetime`, a `Path` and a `set` are what a payload can legitimately carry and
+    `json` cannot encode. Falling back to `str` keeps the run recorded, where raising
+    would drop the only evidence that it happened at all — the same rule a malformed
+    finding inside that payload already follows.
+    """
+    rid = save_run(
+        _env(
+            job="unserialisable/payload",
+            payload={"at": datetime.now(UTC), "path": Path("/x/backup-all.sh"), "tags": {"a", "b"}},
+        )
+    )
+    row = next(r for r in recent_runs(limit=10) if r.id == rid)
+    assert row.status == "success"
+    assert row.payload is not None
+    decoded = json.loads(row.payload)
+    assert decoded["path"] == "/x/backup-all.sh"
+    assert decoded["at"]
+    # Stringified rather than dropped; a set has no JSON form and no stable order,
+    # so this only claims the elements survived.
+    assert "a" in decoded["tags"] and "b" in decoded["tags"]
 
 
 def test_recent_runs_filters_by_job() -> None:
@@ -355,7 +444,7 @@ def test_ensure_schema_adds_only_what_a_partly_migrated_table_is_missing(tmp_pat
     """A host already carrying the earlier columns gets just the new one, safely.
 
     This is not a hypothetical state: a database migrated by an earlier build is
-    already in it, and so is any host that took the previous six-column migration.
+    already in it, and so is any host that took the earlier six-column migration.
     So the migration has to be incremental rather than all-or-nothing, and its second
     pass over a populated table has to be as non-destructive as its first.
     """
@@ -374,12 +463,94 @@ def test_ensure_schema_adds_only_what_a_partly_migrated_table_is_missing(tmp_pat
     assert _read(db, "stderr_tail") == [(None,)] * _LEGACY_ROWS
 
 
+def test_ensure_schema_indexes_the_run_history_read_path(tmp_path: Path) -> None:
+    """`ORDER BY timestamp DESC LIMIT n` over 140,385 rows is a full scan without this.
+
+    And `recent_runs(job=...)` filters on `action`, so that column needs one too. Both
+    are on the read path an API or TUI polls, and both would otherwise scan and sort
+    the whole table on every call.
+    """
+    db = _pre_migration_db(tmp_path / "indexed.db")
+    ensure_schema(db_path=db)
+    names = _indexes(db)
+    assert "ix_maintenancerecord_timestamp" in names
+    assert "ix_maintenancerecord_action" in names
+
+
+def test_ensure_schema_is_idempotent_with_the_indexes(tmp_path: Path) -> None:
+    db = _pre_migration_db(tmp_path / "indexed.db")
+    ensure_schema(db_path=db)
+    before = _indexes(db)
+    assert ensure_schema(db_path=db) == []
+    assert ensure_schema(db_path=db) == []
+    assert _indexes(db) == before, "a later pass added a second index under another name"
+
+
+def test_a_fresh_database_gets_the_same_indexes_from_create_all() -> None:
+    """The model and the migration have to agree on the names.
+
+    `create_all` builds these from `index=True` and `ensure_schema` issues the SQL
+    itself, so a rename on one side alone would leave a migrated database and a fresh
+    one holding the same index under two names — and `IF NOT EXISTS` would then add a
+    second copy rather than skip. This reads the suite's own database, which
+    `create_all` built.
+    """
+    names = _indexes(db_module.DB_FILE)
+    assert "ix_maintenancerecord_timestamp" in names
+    assert "ix_maintenancerecord_action" in names
+
+
+def test_ensure_schema_survives_another_process_migrating_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Four subsystems call `init_db()`, so two can migrate at the same time.
+
+    Both read the column list, both conclude `trigger` is missing, and both issue the
+    same `ALTER`. The loser used to take `duplicate column name` as an unhandled error
+    out of `init_db()` — a hard startup failure on the live database, which is the one
+    outcome this migration exists to make impossible.
+    """
+
+    # Captured before the patch below, so the competing connection is a real one
+    # rather than a second scripted double that would recurse into itself.
+    real_connect = sqlite3.connect
+
+    def competing_migration(_: sqlite3.Connection) -> None:
+        with closing(real_connect(tmp_path / "raced.db")) as other:
+            other.execute("ALTER TABLE maintenancerecord ADD COLUMN trigger TEXT NOT NULL DEFAULT ''")
+            other.commit()
+
+    db = _pre_migration_db(tmp_path / "raced.db")
+    with _scripted_connection(monkeypatch, competing_migration):
+        added = ensure_schema(db_path=db)
+
+    assert "trigger" not in added, "another process added that column, not this call"
+    assert set(added) == _ADDED - {"trigger"}
+    assert _ADDED <= _columns(db), "the losing process must leave the column in place"
+    assert ensure_schema(db_path=db) == [], "and still be idempotent afterwards"
+
+
+def test_ensure_schema_surfaces_a_database_it_cannot_migrate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A locked or corrupt database is not a lost race, and must still fail loudly.
+
+    Recovering from every `OperationalError` would turn a real failure into a quiet
+    success — the schema half-migrated, and an entry point reporting that it started.
+    """
+
+    def locked(_: sqlite3.Connection) -> None:
+        raise sqlite3.OperationalError("database is locked")
+
+    db = _pre_migration_db(tmp_path / "locked.db")
+    with _scripted_connection(monkeypatch, locked), pytest.raises(sqlite3.OperationalError, match="locked"):
+        ensure_schema(db_path=db)
+
+
 def test_ensure_schema_preserves_existing_rows_and_their_values(tmp_path: Path) -> None:
     """The property the 140,385 rows on the host depend on.
 
     Not the count — the values. Every column that existed before the migration must
     come back byte for byte, because a migration that quietly normalised a
-    `log_output` would be a data-loss bug that counting rows cannot see. And the six
+    `log_output` would be a data-loss bug that counting rows cannot see. And the seven
     new columns must read as the defaults their `ALTER` declared, since that is what
     every pre-existing row now holds.
     """
@@ -401,7 +572,7 @@ def test_ensure_schema_preserves_existing_rows_and_their_values(tmp_path: Path) 
 def test_ensure_schema_ignores_a_database_with_no_table(tmp_path: Path) -> None:
     """A fresh database is `create_all`'s to make, already carrying every column.
 
-    Claiming six columns here would report a migration that never happened, and a
+    Claiming seven columns here would report a migration that never happened, and a
     caller printing that would tell an operator a table was altered when it was not.
     """
     with closing(sqlite3.connect(tmp_path / "empty.db")):
@@ -412,7 +583,7 @@ def test_ensure_schema_ignores_a_database_with_no_table(tmp_path: Path) -> None:
 def test_init_db_runs_the_migration(monkeypatch: pytest.MonkeyPatch) -> None:
     """The wiring: `create_all` alone leaves an existing table untouched.
 
-    Without this call the six columns are declared but never added to the host's
+    Without this call the seven columns are declared but never added to the host's
     database, and every query against it raises `OperationalError: no such column:
     maintenancerecord.trigger` — so the call is pinned here rather than discovered
     in production.
@@ -487,6 +658,77 @@ def test_findings_that_are_not_a_list_are_ignored() -> None:
     """`findings: 5` is uniterable, so it must be skipped rather than raised on."""
     rid = save_run(_env(payload={"findings": 5}))
     assert any(r.id == rid for r in recent_runs(limit=200))
+
+
+def test_a_repeating_finding_refreshes_one_open_row() -> None:
+    """A standing condition must not append a new open incident on every run.
+
+    `get_security_summary` counts unresolved **rows**, so a job that runs every five
+    minutes reporting the same finding would inflate `unresolved_total` without
+    bound — and once open rows pass that summary's own thousand-row limit it would
+    truncate the newest of them, pushing genuine security-agent findings out of the
+    numbers it publishes. One standing exposure is one row, observed again.
+    """
+    save_run(
+        _env(job="dedup/one", payload={"findings": [{"severity": "high", "rule": "repeats", "message": "9 days"}]})
+    )
+    rows = _incidents("repeats")
+    assert len(rows) == 1
+    assert rows[0].message == "9 days"
+    assert rows[0].severity == "high"
+
+    later = datetime.now(UTC) + timedelta(seconds=300)
+    save_run(
+        _env(
+            job="dedup/one",
+            payload={"findings": [{"severity": "medium", "rule": "repeats", "message": "40 days"}]},
+            started_at=later,
+        )
+    )
+
+    rows = _incidents("repeats")
+    assert len(rows) == 1, f"a second open row was appended: {rows}"
+    assert rows[0].message == "40 days"
+    assert rows[0].severity == "medium"
+    # Refreshed, not left at the first observation: the row has to say when the
+    # condition was last actually seen.
+    assert rows[0].timestamp == later.replace(tzinfo=None)
+
+
+def test_a_reoccurrence_after_resolution_opens_a_fresh_row() -> None:
+    """A finding that was resolved and came back is a real re-occurrence.
+
+    Merging into the resolved row would leave it continuously open, erasing both that
+    it had been dealt with and that the problem came back.
+    """
+    save_run(_env(job="dedup/two", payload={"findings": [{"severity": "high", "rule": "returns", "message": "first"}]}))
+    _resolve("returns")
+
+    save_run(
+        _env(job="dedup/two", payload={"findings": [{"severity": "high", "rule": "returns", "message": "second"}]})
+    )
+
+    assert [r.message for r in _incidents("returns")] == ["second"]
+    assert [r.message for r in _incidents("returns", resolved=True)] == ["first"]
+
+
+def test_two_findings_for_one_rule_in_one_payload_collapse_onto_one_row() -> None:
+    """A single payload must not reintroduce the duplication the upsert removes."""
+    save_run(
+        _env(
+            job="dedup/three",
+            payload={
+                "findings": [
+                    {"severity": "low", "rule": "twice", "message": "first"},
+                    {"severity": "high", "rule": "twice", "message": "second"},
+                ]
+            },
+        )
+    )
+    rows = _incidents("twice")
+    assert len(rows) == 1
+    assert rows[0].message == "second"
+    assert rows[0].severity == "high"
 
 
 def test_a_run_and_its_findings_are_written_in_one_transaction(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -69,9 +69,16 @@ class SystemMetric(SQLModel, table=True):
 
 class MaintenanceRecord(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    timestamp: datetime = Field(
+        default_factory=lambda: datetime.now(UTC),
+        # Indexed because this is the run-history read path: `recent_runs` asks for
+        # the newest rows and an API or TUI polls it, so an unindexed ORDER BY would
+        # scan and sort the whole table — 140,385 rows on the host's database — per
+        # call. `SystemMetric.timestamp` has always been indexed for the same reason.
+        index=True,
+    )
     agent: str  # e.g., "linux", "security"
-    action: str  # e.g., "dnf-upgrade", "flatpak-cleanup"
+    action: str = Field(index=True)  # e.g., "dnf-upgrade", "flatpak-cleanup"
     status: str  # "success", "failed"
     log_output: str
     duration_ms: int
@@ -206,6 +213,33 @@ _DISPATCH_COLUMNS: tuple[tuple[str, str], ...] = (
     ("stderr_tail", "TEXT"),
 )
 
+# The indexes `recent_runs` needs, named exactly as SQLAlchemy names the ones it
+# creates for the `index=True` fields above, so a database built by `create_all` and
+# one migrated by this function arrive at the same names and `IF NOT EXISTS` makes
+# the second pass a no-op rather than a duplicate index under a second name.
+#
+# `CREATE INDEX` is in the same additive class as the `ALTER TABLE`s above — nothing
+# is rewritten, dropped or deleted, and the rows are untouched. It is also the one
+# statement here that has to read the whole table, once, on the first run against a
+# database that did not already have it.
+_RUN_INDEXES: tuple[str, ...] = (
+    "CREATE INDEX IF NOT EXISTS ix_maintenancerecord_timestamp ON maintenancerecord (timestamp)",
+    "CREATE INDEX IF NOT EXISTS ix_maintenancerecord_action ON maintenancerecord (action)",
+)
+
+# The one table this migration touches, so the statements above cannot disagree with
+# the `PRAGMA` below about which table they are reading.
+_TABLE = "maintenancerecord"
+
+
+def _columns_in(connection: sqlite3.Connection) -> set[str]:
+    """The column names `connection` reports for `_TABLE`, empty if there is no table.
+
+    Re-read rather than cached, because the second read is what tells a lost migration
+    race apart from a real failure: by then the column may genuinely be there.
+    """
+    return {row[1] for row in connection.execute(f"PRAGMA table_info({_TABLE})")}
+
 
 def ensure_schema(db_path: Path | None = None) -> list[str]:
     """Add the dispatch provenance columns to an existing `maintenancerecord`.
@@ -223,9 +257,15 @@ def ensure_schema(db_path: Path | None = None) -> list[str]:
     whatever state the engine is in, and because a migration failure should read as
     a `sqlite3` error instead of arriving wrapped in a SQLAlchemy stack trace.
 
-    It only ever adds a column. No table is rebuilt, dropped or emptied, so the rows
-    already on the host are untouched and come back reading the default each `ALTER`
-    declared — which is what makes this safe to run without a backup.
+    It only ever adds a column or an index. No table is rebuilt, dropped or emptied, so
+    the rows already on the host are untouched and come back reading the default each
+    `ALTER` declared — which is what makes this safe to run without a backup.
+
+    Also creates the two indexes `recent_runs` reads through. They are named as
+    SQLAlchemy names the ones `create_all` builds from `index=True`, so a fresh
+    database and a migrated one agree and `IF NOT EXISTS` makes every pass after the
+    first a no-op. Creating an index on an existing table is the one statement here
+    that reads the whole table, and it does so once.
 
     Idempotent, and safe on every `init_db()`: it reads the columns that exist and
     adds only what is missing. A database with no `maintenancerecord` yet returns
@@ -233,20 +273,41 @@ def ensure_schema(db_path: Path | None = None) -> list[str]:
     already in it, and reporting seven names there would announce a migration that did
     not happen.
 
-    Returns the column names this call added, which is empty once the schema is
-    current.
+    **Safe against two processes migrating at once.** Four subsystems call `init_db()`
+    and the WAL hook's own rationale is multi-process access, so two can read the same
+    column list, both conclude a column is missing, and both issue the same `ALTER` —
+    where the loser would otherwise take `duplicate column name` as an unhandled error
+    out of `init_db()` and fail that entry point on the live database. A column that
+    turns out to be there anyway is treated as done, because it is. Any other
+    `OperationalError` — a locked or corrupt database — is still raised, since calling
+    that a race would be exactly the kind of quiet success this task exists to prevent.
+
+    Returns the column names **this call** added, which is empty once the schema is
+    current. A column another process added in the gap is not reported as ours, though
+    it is left in place. Indexes are ensured but not reported: they are not columns,
+    and after the first pass there is nothing to report anyway.
     """
     target = DB_FILE if db_path is None else Path(db_path)
     with closing(sqlite3.connect(target)) as connection:
-        present = {row[1] for row in connection.execute("PRAGMA table_info(maintenancerecord)")}
+        present = _columns_in(connection)
         if not present:
             return []
-        # Identifiers come from this module's own constant, never from a caller.
+        # Identifiers come from this module's own constants, never from a caller.
         added: list[str] = []
         for name, declaration in _DISPATCH_COLUMNS:
-            if name not in present:
-                connection.execute(f"ALTER TABLE maintenancerecord ADD COLUMN {name} {declaration}")
-                added.append(name)
+            if name in present:
+                continue
+            try:
+                connection.execute(f"ALTER TABLE {_TABLE} ADD COLUMN {name} {declaration}")
+            except sqlite3.OperationalError:
+                # Re-read rather than pattern-match the message: what distinguishes
+                # the lost race is the column being there now, not the wording.
+                if name not in _columns_in(connection):
+                    raise
+                continue
+            added.append(name)
+        for statement in _RUN_INDEXES:
+            connection.execute(statement)
         connection.commit()
     return added
 
@@ -309,6 +370,76 @@ def _incidents_from_payload(payload: dict[str, Any] | None) -> list[SecurityInci
     return incidents
 
 
+def _incident_with_rule(session: Session, rule_id: str, resolved: bool = False) -> SecurityIncident | None:
+    """The incident for `rule_id` in the given resolution state, if there is one.
+
+    Open only by default, and `_store_findings` asks for the open one: a resolved row
+    is a finding that was dealt with, and merging a re-occurrence into it would erase
+    both the resolution and the fact that the problem came back. Compared against a
+    named value rather than a literal for the same reason `get_security_incidents`
+    takes `resolved` as an argument — `== False` is both a lint error and, to a type
+    checker, a comparison on a plain `bool` rather than on a column.
+    """
+    return session.exec(
+        select(SecurityIncident).where(
+            SecurityIncident.rule_id == rule_id,
+            SecurityIncident.resolved == resolved,
+        )
+    ).first()
+
+
+def _store_findings(session: Session, payload: dict[str, Any] | None, observed_at: datetime) -> None:
+    """Record a payload's findings, keeping one open row per `rule_id`.
+
+    A condition that persists — `backup-stale` reporting a nine-day-old dump on every
+    run — must not append a fresh open incident every time it is observed.
+    `get_security_summary` counts unresolved **rows**, so appending would inflate
+    `unresolved_total` in proportion to how often the job runs, and once open rows
+    pass its own thousand-row limit the summary would truncate the newest of them:
+    recurring dispatch findings would push genuine security-agent findings out of the
+    window and the endpoint would report the truncated set as if it were the whole. So
+    a finding whose rule already has an open row refreshes that row — the same standing
+    exposure, seen again — rather than adding a second.
+
+    The upsert is also what makes §6.3's "the same store the Python agent uses" true:
+    a store holding a duplicate of every recurring finding is not a shared store.
+
+    Two findings for one rule inside a single payload collapse onto the same row, so a
+    payload cannot reintroduce the duplication it is being deduplicated for. They are
+    held in `pending` rather than relying on the session to flush and see its own
+    pending rows, so that collapse does not depend on autoflush timing.
+    """
+    pending: dict[str, SecurityIncident] = {}
+    for incident in _incidents_from_payload(payload):
+        open_row = pending.get(incident.rule_id) or _incident_with_rule(session, incident.rule_id)
+        if open_row is None:
+            open_row = incident
+            pending[incident.rule_id] = incident
+            session.add(open_row)
+        open_row.timestamp = observed_at
+        open_row.message = incident.message
+        open_row.severity = incident.severity
+
+
+def _json_payload(payload: dict[str, Any] | None) -> str | None:
+    """A payload as JSON, or None if it cannot be encoded at all.
+
+    `default=str` covers what a payload can legitimately carry that JSON cannot — a
+    `datetime`, a `Path`, a `set` from any Python producer — and keeps the run
+    recorded, where raising here would drop the only evidence that it happened.
+
+    The fallback for what `default` still cannot save, a self-referential structure,
+    stores nothing rather than raising: a record with no payload is still a record,
+    and the raw output stays in the log tails.
+    """
+    if payload is None:
+        return None
+    try:
+        return json.dumps(payload, default=str)
+    except (TypeError, ValueError):
+        return None
+
+
 def save_run(envelope: Envelope, agent: str = "dispatch") -> int:
     """Store one dispatched run as a `MaintenanceRecord`, with its findings.
 
@@ -320,11 +451,13 @@ def save_run(envelope: Envelope, agent: str = "dispatch") -> int:
     writing, because the envelope already knows when the run began and the two differ
     by exactly the run's own duration — which is what a timed-out action has, and
     dating it to when its result was finally written would misdate the one run whose
-    timing is the reason anyone is reading the list.
+    timing is the reason anyone is reading the list. Its findings are stamped the
+    same way, since a finding was observed when the run that reported it happened.
 
     The row and any findings go in one session and one commit, so a run whose findings
     could not be written cannot be left behind claiming it had none: either the run
-    and its findings are both stored, or neither is.
+    and its findings are both stored, or neither is. Everything that can fail while
+    building the row happens inside that session, so no failure can precede the record.
 
     `log_output` keeps the stdout tail, and the stderr tail goes to its own column
     rather than being appended to that one: stdout is what other code already reads
@@ -334,27 +467,29 @@ def save_run(envelope: Envelope, agent: str = "dispatch") -> int:
 
     Returns the new row's id.
     """
-    record = MaintenanceRecord(
-        timestamp=envelope.started_at,
-        agent=agent,
-        action=envelope.job,
-        status=envelope.status.value,
-        log_output=envelope.stdout_tail,
-        duration_ms=envelope.duration_ms,
-        trigger=envelope.trigger,
-        exit_code=envelope.exit_code,
-        resolved_path=envelope.resolved_path,
-        git_commit=envelope.git_commit,
-        git_dirty=envelope.git_dirty,
-        stderr_tail=envelope.stderr_tail,
-        payload=None if envelope.payload is None else json.dumps(envelope.payload),
-    )
     with Session(engine) as session:
+        record = MaintenanceRecord(
+            timestamp=envelope.started_at,
+            agent=agent,
+            action=envelope.job,
+            status=envelope.status.value,
+            log_output=envelope.stdout_tail,
+            duration_ms=envelope.duration_ms,
+            trigger=envelope.trigger,
+            exit_code=envelope.exit_code,
+            resolved_path=envelope.resolved_path,
+            git_commit=envelope.git_commit,
+            git_dirty=envelope.git_dirty,
+            stderr_tail=envelope.stderr_tail,
+            payload=_json_payload(envelope.payload),
+        )
         session.add(record)
-        for incident in _incidents_from_payload(envelope.payload):
-            session.add(incident)
+        _store_findings(session, envelope.payload, envelope.started_at)
         session.commit()
-        assert record.id is not None, "a committed row has an id"
+        # A raise rather than an `assert`, which `python -O` strips — after which
+        # this would quietly return None from a function that promises an int.
+        if record.id is None:
+            raise RuntimeError("a committed MaintenanceRecord has an id")
         return record.id
 
 
