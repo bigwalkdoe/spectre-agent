@@ -11,10 +11,13 @@ the host's maintenance suite or touches a scheduler.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 from packages.dispatch.envelope import (
     OUTPUT_LIMIT,
@@ -223,6 +226,19 @@ def test_parse_payload_loses_a_payload_containing_a_line_separator() -> None:
 
 
 def test_envelope_is_immutable() -> None:
+    """Frozen, checked against the exception dataclasses actually raise.
+
+    This used to catch a bare `Exception`, which is satisfied by any failure at
+    all. A class that simply refuses assignment — an ordinary object whose
+    `__setattr__` raises `AttributeError`, which is not frozen and would let a
+    record be edited field by field through it — passed the old version. The point
+    of the test is the specific refusal, so the specific type is named.
+
+    `status` rather than `job`, because `status` is the field a reader is least able
+    to reconstruct afterwards: a record whose status was edited to `success` after
+    the fact is indistinguishable from one that succeeded, which is exactly the lie
+    the frozen dataclass exists to make impossible.
+    """
     e = Envelope(
         job="backups/backup-all",
         trigger="cli",
@@ -237,11 +253,8 @@ def test_envelope_is_immutable() -> None:
         status=Status.SUCCESS,
         payload=None,
     )
-    try:
+    with pytest.raises(dataclasses.FrozenInstanceError):
         e.status = Status.FAILED  # type: ignore[misc]
-    except Exception:
-        return
-    raise AssertionError("expected frozen")
 
 
 def test_build_envelope_records_the_job_name_and_provenance(tmp_path: Path) -> None:
