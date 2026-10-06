@@ -82,9 +82,9 @@ def test_the_network_monitor_keeps_the_read_only_defaults() -> None:
     row still comes first changes no entry and is not a regression, so the generated
     entry is what makes the claim hold.
     """
-    assert gen_registry.overrides_for("network/network-monitor") == {}
+    assert gen_registry.overrides_for("network/monitor-network") == {}
     assert gen_registry.overrides_for("maintenance/network-monitor") == {}
-    assert not gen_registry.is_mutating_network_job("network/network-monitor")
+    assert not gen_registry.is_mutating_network_job("network/monitor-network")
     # ...and the rest of the group still mutates, so this is not a group disabled.
     assert gen_registry.is_mutating_network_job("network/setup-vpn")
     assert gen_registry.overrides_for("network/setup-vpn") == {
@@ -93,8 +93,8 @@ def test_the_network_monitor_keeps_the_read_only_defaults() -> None:
         "concurrency": "forbid",
     }
 
-    entries = gen_registry.build_entries(["network/network-monitor.sh", "network/setup-vpn.sh"])
-    monitor = next(e for e in entries if e["name"] == "network/network-monitor")
+    entries = gen_registry.build_entries(["network/monitor-network.sh", "network/setup-vpn.sh"])
+    monitor = next(e for e in entries if e["name"] == "network/monitor-network")
     assert "sudo" not in monitor
     assert "mutates" not in monitor
     assert "concurrency" not in monitor

@@ -1149,11 +1149,11 @@ def test_duplicate_action_in_two_groups_is_a_finding(tmp_path: Path, monkeypatch
     """The network-monitor.sh duplication, made permanently detectable."""
     monkeypatch.setenv("SPECTRE_ACTIONS_ROOT", str(tmp_path))
     _mk(tmp_path, "maintenance/network-monitor.sh")
-    _mk(tmp_path, "network/network-monitor.sh")
+    _mk(tmp_path, "network/monitor-network.sh")
     import packages.dispatch.verify as verify_mod
     monkeypatch.setattr(verify_mod, "JOBS", [
         make_job("maintenance/network-monitor.sh", group="maintenance"),
-        make_job("network/network-monitor.sh", group="network"),
+        make_job("network/monitor-network.sh", group="network"),
     ])
     findings = [f for f in verify_mod.verify(HostInventory([], [])) if f.code == "duplicate"]
     assert findings

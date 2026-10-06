@@ -172,8 +172,8 @@
     ]
   },
   {
-    "name": "maintenance/check-performance",
-    "action": "maintenance/check-performance.sh",
+    "name": "maintenance/check-system-performance",
+    "action": "maintenance/check-system-performance.sh",
     "group": "maintenance",
     "summary": "Monitor system performance metrics and alert on anomalies"
   },
@@ -311,19 +311,19 @@
     "summary": "Manage the configured fleet of hosts"
   },
   {
-    "name": "network/network-monitor",
-    "action": "network/network-monitor.sh",
-    "group": "network",
-    "summary": "Monitor network connectivity and performance"
-  },
-  {
-    "name": "network/network-security-hardening",
-    "action": "network/network-security-hardening.sh",
+    "name": "network/harden-network-security",
+    "action": "network/harden-network-security.sh",
     "group": "network",
     "summary": "Apply network security best practices",
     "sudo": true,
     "mutates": true,
     "concurrency": "forbid"
+  },
+  {
+    "name": "network/monitor-network",
+    "action": "network/monitor-network.sh",
+    "group": "network",
+    "summary": "Monitor network connectivity and performance"
   },
   {
     "name": "network/optimize-network-config",

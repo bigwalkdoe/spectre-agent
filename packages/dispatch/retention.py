@@ -38,7 +38,7 @@ name matching nothing produces a rule that never fires and no other symptom.
 `MaintenanceRecord.action` holds — `save_run` stores `envelope.job`, not the script
 path — and it is what `prune`'s `DELETE ... WHERE action = ?` matches against. It is
 also what keeps two registered jobs apart: `performance/check-performance` and
-`maintenance/check-performance` share the stem `check-performance` and are different
+`maintenance/check-system-performance` share the stem `check-performance` and are different
 jobs on different schedules.
 
 **The `"unknown"` bucket is the ordinary case, not an edge case.** On the host this was
