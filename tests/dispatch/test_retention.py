@@ -40,7 +40,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError
 from sqlmodel import Session, SQLModel, create_engine
 
-from packages.dispatch import retention
+from packages.dispatch import registry, retention
 from packages.dispatch.envelope import Envelope, Status
 from packages.dispatch.registry import JOBS, get_job
 from packages.dispatch.retention import (
@@ -54,6 +54,7 @@ from packages.dispatch.retention import (
 )
 from packages.memory import db as db_module
 from packages.memory.db import MaintenanceRecord, save_run
+from tests.dispatch.conftest import make_job
 
 # A fixed instant, so a row placed exactly on a cutoff is placed exactly on it.
 # `datetime.now()` would drift under the test's own runtime and turn the boundary
@@ -183,6 +184,34 @@ def test_two_jobs_sharing_a_stem_are_told_apart() -> None:
     assert twin.name not in HIGH_FREQUENCY_JOBS
     assert cutoff_for(twin, NOW) == NOW - STANDARD_RETENTION
     assert cutoff_for(job, NOW) == NOW - timedelta(days=90)
+
+
+def test_a_replaced_registry_is_honoured_by_retention_and_the_registry_alike(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One registry, read live, by every consumer of the name.
+
+    `retention` used to do `from ...registry import JOBS`, which binds *its own*
+    name once at import — so a caller that replaced `registry.JOBS` was honoured by
+    `get_job`, `jobs_in_group`, `groups` and `verify`, and quietly ignored by
+    retention. Two consumers of "the registry" then read different registries, and
+    the disagreement was invisible: a job the registry knew about was reported as
+    `unknown`, folded in with the 140,385 legacy rows on the host this was written
+    against.
+
+    The docstring claimed the opposite of what the code did, so the claim is what is
+    pinned here rather than deleted. All four answers must agree on the replacement,
+    which is the property that was broken.
+    """
+    replacement = [make_job("t/only.sh")]
+    monkeypatch.setattr(registry, "JOBS", replacement)
+
+    assert registry.get_job("t/only").name == "t/only"
+    assert retention._registered() == frozenset({"t/only"})
+    assert retention._key_for("t/only") == "t/only"
+    # And the negative, which is the half that makes the first half meaningful: a
+    # name the replacement does not hold is still a row with no job.
+    assert retention._key_for("backups/backup-all") == UNKNOWN_JOB
 
 
 # ── prune ────────────────────────────────────────────────────────────────────

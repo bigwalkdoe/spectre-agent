@@ -74,7 +74,8 @@ from urllib.parse import quote
 from sqlalchemy import CursorResult, delete, func, select
 from sqlmodel import Session, SQLModel, create_engine
 
-from packages.dispatch.registry import JOBS, Job, get_job
+from packages.dispatch import registry
+from packages.dispatch.registry import Job
 from packages.memory.db import MaintenanceRecord, engine
 
 # The run-record table as SQLAlchemy sees it. Every column reference below goes
@@ -245,12 +246,16 @@ def _targets(session: Session, now: datetime) -> list[tuple[str, str, datetime]]
 def _registered() -> frozenset[str]:
     """Every registered job name, read on each call rather than frozen at import.
 
-    `get_job`, `jobs_in_group` and `groups` all read the module-level `JOBS` when they
-    are called, so a caller that replaces it is honoured by all four; freezing the set
-    here would make retention the one function that disagrees. Sixty-one names make
-    the rebuild free.
+    `registry.get_job`, `registry.jobs_in_group` and `registry.groups` all read the
+    module-level `JOBS` when they are called, so a caller that replaces it is
+    honoured by all four — this one included. That is why the import above is
+    `from packages.dispatch import registry` and the loop below reads
+    `registry.JOBS`: a `from ... import JOBS` binds *this module's* name once, at
+    import, and retention then became the one consumer of "the registry" that
+    disagreed with the other, with a docstring asserting the opposite of what it
+    did. Sixty-one names make the rebuild free.
     """
-    return frozenset(job.name for job in JOBS)
+    return frozenset(job.name for job in registry.JOBS)
 
 
 def _key_for(action: str) -> str:
@@ -272,7 +277,7 @@ def _cutoff_for_action(action: str, now: datetime) -> datetime:
     assuming a fact nobody recorded.
     """
     try:
-        return cutoff_for(get_job(action), now)
+        return cutoff_for(registry.get_job(action), now)
     except KeyError:
         return now - STANDARD_RETENTION
 
