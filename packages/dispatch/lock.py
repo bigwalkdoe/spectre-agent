@@ -21,12 +21,22 @@ without releasing have to be told apart from the third, where it is still workin
 
 Those two ways are reclaimed from: a pid that no longer exists, which is a
 dispatcher that was killed rather than exiting, and a lock older than twice the
-job's own timeout, which is a holder that never came back. A file naming no
-readable holder is reclaimed on the same terms — it is a dispatcher that died
-between creating and writing it, or one truncated by a full disk. Reclaiming is
-tried *once*: an unbounded reclaim loop against a lock that keeps being re-created
-is a livelock, and a lock that cannot be reclaimed must fail loudly rather than
-spin.
+job's own timeout, which is a holder that never came back.
+
+A file that names no readable holder is a third case, and it is treated as neither.
+`O_CREAT | O_EXCL` creates the file empty and the record follows in the next
+write, so an empty or unparseable file is ambiguous between a dispatcher that has
+claimed it and one that died having done so — and guessing wrong in that direction
+takes two mutating jobs at once, which is the single outcome this module exists to
+prevent. So it is *refused*, carrying the pid `0` that names no process and the
+file's own mtime as the only evidence there is of when it appeared. No liveness
+question is asked of it, because there is no pid to ask about. It becomes
+reclaimable on the age rule alone once it is older than twice the timeout: refused
+while the reading is ambiguous, reclaimed once it is not.
+
+Reclaiming is tried *once* wherever it happens at all: an unbounded reclaim loop
+against a lock that keeps being re-created is a livelock, and a lock that cannot
+be reclaimed must fail loudly rather than spin.
 
 Releasing is where the lock's other half lives. `release` unlinks only while the
 file still names this process, because a run whose lock was reclaimed as stale
@@ -58,13 +68,15 @@ _STALE_TIMEOUTS = 2
 # to read it. The mode is still masked by the umask, which can only narrow this.
 _LOCK_MODE = 0o600
 
-# What `read_lock` reports for a file that exists but names no holder. Neither
-# value is a real pid or a real instant — pid 0 is not a process any dispatcher
-# can have, and the epoch is not a time any of them started — so they cannot be
-# mistaken for a holder by anything reading this file. `alive` treats a
-# non-positive pid as dead, which is what keeps such a file from wedging the job:
-# the next run reclaims it instead of refusing forever.
-_NO_HOLDER: tuple[int, datetime] = (0, datetime.fromtimestamp(0, UTC))
+# The pid reported for a lock file that names no holder. 0 is not a process any
+# dispatcher can have, so nothing reading this file can mistake it for one — and it
+# never reaches `_alive`, because there is no process there to ask the kernel about.
+_UNKNOWN_PID = 0
+
+# The `started_at` fallback for the one case the refusal cannot evidence: the file
+# disappeared between being judged and being named. Everything else reports when
+# the file actually appeared.
+_EPOCH = datetime.fromtimestamp(0, UTC)
 
 
 class LockUnavailable(Exception):
@@ -110,11 +122,13 @@ def read_lock(path: Path) -> tuple[int, datetime] | None:
     """The `(pid, started_at)` recorded in `path`, or None if it names no holder.
 
     None covers an absent file, an unreadable one and one whose contents do not
-    describe a holder, because the only safe response to all three is the same as to
-    a dead holder. Nothing is guessed: a `pid` that is not an integer and a
-    `started_at` without a timezone are both refused, since an instant that cannot be
-    compared against a timeout would let a file this dispatcher did not write decide
-    when its job may run again.
+    describe a holder. The caller gives those three different answers — a missing
+    file is a free job, an unreadable one is an ambiguity to refuse — so what None
+    means is left here rather than decided in one place: it says only that no holder
+    is named. Nothing is guessed: a `pid` that is not an integer and a `started_at`
+    without a timezone are both refused, since an instant that cannot be compared
+    against a timeout would let a file this dispatcher did not write decide when its
+    job may run again.
     """
     try:
         decoded = json.loads(path.read_text(encoding="utf-8"))
@@ -136,16 +150,28 @@ def read_lock(path: Path) -> tuple[int, datetime] | None:
     return (pid, when) if when.tzinfo is not None else None
 
 
+def _filed_at(path: Path) -> datetime | None:
+    """When `path` was last written, or None if it is no longer there.
+
+    The one piece of evidence an unreadable lock file offers about itself, and the
+    only thing its age can be judged from.
+    """
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime, UTC)
+    except OSError:
+        return None
+
+
 def _alive(pid: int) -> bool:
     """Whether `pid` is a process this host still has.
 
     `PermissionError` means yes: the process exists and belongs to another user,
     which for an action running under sudo is the ordinary answer, and the opposite
-    reading would reclaim a live lock. A pid that is not positive is never a holder
+    reading would reclaim a live lock. A pid that is not positive names no process
     this can verify — `kill` reads 0 and a negative pid as "my process group" and
-    "every process I may signal", which says nothing about a lock's owner — and
-    `read_lock` never produces one except for an unreadable file, which must not
-    wedge the job.
+    "every process I may signal" — and the only such pid reported anywhere is the
+    `_UNKNOWN_PID` of an unreadable file, which is refused on its age before any
+    liveness question about it arises.
     """
     if pid <= 0:
         return False
@@ -203,15 +229,16 @@ class JobLock:
             self._claim(path, body)
         except FileExistsError:
             holder = read_lock(path)
-            if not self._abandoned(holder):
-                raise self._refused(holder) from None
-            # Provably nobody is working on this job. Remove the file and claim it
-            # again — once, because the retry is the end of the line, not a loop.
+            if not self._abandoned(holder, path):
+                raise self._refused(holder, path) from None
+            # Judged abandoned: a holder that is gone, or a lock older than this job
+            # may ever run. Remove the file and claim it again — once, because the
+            # retry is the end of the line, not a loop.
             path.unlink(missing_ok=True)
             try:
                 self._claim(path, body)
             except FileExistsError:
-                raise self._refused(read_lock(path)) from None
+                raise self._refused(read_lock(path), path) from None
 
         self._held = True
 
@@ -249,28 +276,45 @@ class JobLock:
         finally:
             os.close(fd)
 
-    def _abandoned(self, holder: tuple[int, datetime] | None) -> bool:
-        """Whether `holder` can be proven gone, so its file may be taken over.
+    def _abandoned(self, holder: tuple[int, datetime] | None, path: Path) -> bool:
+        """Whether `path` can be proven abandoned, so its lock may be taken over.
 
-        None counts as proof: a file that names no readable holder is a dispatcher
-        that died between creating and writing it, or one truncated by a full disk,
-        and neither is anybody to wait for. A live holder is waited for until its lock
-        is older than twice this job's own timeout, at which point it is presumed to
-        have never come back rather than to be working for twice its own limit.
+        A holder that named itself is judged by liveness and by age: a pid that is
+        gone is a dispatcher that was killed, and a lock older than twice this job's
+        own timeout belongs to a holder that never came back rather than to one
+        working for twice its own limit.
+
+        A file that named nobody is judged by age alone, and only by age. It has no
+        pid, so there is nothing to signal, and reclaiming it on that ground would be
+        guessing: the window between the exclusive create and the write leaves a file
+        that is empty for as long as one `write` takes, and a second dispatcher
+        arriving in it must wait rather than run the job alongside the first. Age is
+        what settles it — young is ambiguous, old is abandoned — and a file that has
+        since been deleted is nothing to wait for at all.
         """
         if holder is None:
-            return True
+            appeared = _filed_at(path)
+            return appeared is None or self._too_old(appeared)
         pid, started_at = holder
-        if not _alive(pid):
-            return True
+        return not _alive(pid) or self._too_old(started_at)
+
+    def _too_old(self, started_at: datetime) -> bool:
+        """Whether a lock taken at `started_at` is older than this job may ever run."""
         return datetime.now(UTC) - started_at > timedelta(seconds=self._job.timeout * _STALE_TIMEOUTS)
 
-    def _refused(self, holder: tuple[int, datetime] | None) -> LockUnavailable:
-        """The refusal to raise, naming the holder where the file names one."""
-        pid, started_at = _NO_HOLDER if holder is None else holder
-        held_by = (
-            f"pid {pid} since {started_at.isoformat()}"
-            if holder
-            else f"an unidentified holder in {lock_path(self._job)}"
+    def _refused(self, holder: tuple[int, datetime] | None, path: Path) -> LockUnavailable:
+        """The refusal to raise: naming the holder where the file names one, and the
+        file where it does not."""
+        if holder is None:
+            return LockUnavailable(
+                f"job {self._job.name} is already running: the holder of {path} cannot be determined "
+                f"(unreadable lock file — is a run in flight?)",
+                _UNKNOWN_PID,
+                _filed_at(path) or _EPOCH,
+            )
+        pid, started_at = holder
+        return LockUnavailable(
+            f"job {self._job.name} is already running: held by pid {pid} since {started_at.isoformat()}",
+            pid,
+            started_at,
         )
-        return LockUnavailable(f"job {self._job.name} is already running: held by {held_by}", pid, started_at)

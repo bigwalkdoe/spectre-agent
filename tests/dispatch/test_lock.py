@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -50,6 +51,16 @@ def _write_lock(job: Job, pid: int, started_at: datetime) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"pid": pid, "started_at": started_at.isoformat()}), encoding="utf-8")
     return path
+
+
+def _backdate(path: Path, seconds: float) -> None:
+    """Make `path` look `seconds` old, mtime and all.
+
+    `os.utime` rather than a written `started_at`, because the one case that has to be
+    judged by the file's own age is the file that names nothing at all.
+    """
+    when = time.time() - seconds
+    os.utime(path, (when, when))
 
 
 def _dead_pid() -> int:
@@ -199,17 +210,68 @@ def test_a_lock_held_by_another_user_is_not_reclaimed(tmp_path: Path, monkeypatc
     assert path.exists()
 
 
-def test_an_unreadable_lock_is_reclaimed_and_then_released(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A file naming no holder is either a dispatcher that died between creating and
-    writing it, or one truncated by a full disk. Neither is a holder to wait for —
-    and it must not wedge the job forever either."""
+def test_an_empty_lock_file_is_refused_not_reclaimed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`O_CREAT | O_EXCL` creates the file empty and the record follows in the next
+    write, so a file this young is ambiguous between a dispatcher that has claimed it
+    and one that died having done so. Reclaiming here would run two mutating jobs at
+    once — the one outcome the lock exists to prevent — so the run is refused, and no
+    liveness question is asked of a file that names no pid."""
+    _config_dir(tmp_path, monkeypatch)
+    j = _job()
+    path = lock_path(j)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.touch()
+    signalled: list[int] = []
+    real_kill = os.kill
+
+    def watched(pid: int, sig: int) -> None:
+        signalled.append(pid)
+        real_kill(pid, sig)
+
+    monkeypatch.setattr(os, "kill", watched)
+    with pytest.raises(LockUnavailable) as refused:
+        JobLock(j).acquire()
+
+    assert refused.value.pid == 0
+    assert str(path) in str(refused.value)
+    assert "cannot be determined" in str(refused.value)
+    # The file's own mtime is the only evidence there is of when it appeared, and it
+    # is real evidence rather than a placeholder.
+    assert abs((refused.value.started_at - datetime.fromtimestamp(path.stat().st_mtime, UTC)).total_seconds()) < 1
+    assert refused.value.started_at <= datetime.now(UTC)
+    # No pid to ask about, so none was asked about.
+    assert signalled == []
+    assert path.exists()
+
+
+def test_an_unparseable_lock_file_is_refused_too(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Same refusal for a file truncated by a full disk as for one caught mid-write:
+    neither names a holder, so neither may be assumed to be free."""
+    _config_dir(tmp_path, monkeypatch)
+    j = _job()
+    path = lock_path(j)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('{"pid": ', encoding="utf-8")
+    with pytest.raises(LockUnavailable) as refused:
+        JobLock(j).acquire()
+    assert refused.value.pid == 0
+    assert path.exists()
+
+
+def test_an_unreadable_lock_older_than_twice_the_timeout_is_reclaimed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other half of refusing: an unreadable file nobody has claimed within twice
+    this job's own timeout was abandoned, not in flight, so the job must not stay
+    wedged behind it forever."""
     _config_dir(tmp_path, monkeypatch)
     j = _job()
     path = lock_path(j)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("{not json", encoding="utf-8")
+    _backdate(path, 2 * _TIMEOUT + 60)
     with JobLock(j):
-        assert read_lock(path) is not None
+        pass
     assert not path.exists()
 
 
