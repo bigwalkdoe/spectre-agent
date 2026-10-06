@@ -188,6 +188,33 @@ def test_a_lock_older_than_twice_the_timeout_is_reclaimed(tmp_path: Path, monkey
     assert not path.exists()
 
 
+def test_an_unsignalable_pid_is_reclaimed_rather_than_raising(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`os.kill` raises OverflowError — not ProcessLookupError — for a pid at or above
+    2**31, so an uncaught one escapes as a traceback instead of a refusal, and escapes
+    before the age rule runs, which would leave this file unreclaimable by anyone and
+    block the job until it is deleted by hand. No Linux pid reaches 2**31, so it names
+    no process and is reclaimed like any other abandoned lock."""
+    _config_dir(tmp_path, monkeypatch)
+    j = _job()
+    path = _write_lock(j, pid=2**31, started_at=datetime.now(UTC))
+    with JobLock(j):
+        pass
+    assert not path.exists()
+
+
+def test_a_zero_timeout_still_excludes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`registry.py` validates `timeout` as an int and not as a positive one, and the
+    lock cannot lean on registry having validated its input: a zero-length staleness
+    window would make every lock abandoned the instant it was written, and the lock
+    would then exclude nothing at all."""
+    _config_dir(tmp_path, monkeypatch)
+    j = make_job("backups/backup-all.sh", mutates=True, concurrency="forbid", timeout=0)
+    with JobLock(j):
+        with pytest.raises(LockUnavailable) as refused:
+            JobLock(j).acquire()
+    assert refused.value.pid == os.getpid()
+
+
 def test_a_lock_held_by_another_user_is_not_reclaimed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`os.kill` raises PermissionError for a process this user cannot signal, which
     for an action running under sudo is the ordinary case. That is alive, not dead:
@@ -340,6 +367,20 @@ def test_release_is_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     held.release()
     held.release()
     assert not lock_path(j).exists()
+
+
+def test_release_unlinks_the_file_it_claimed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The path is remembered from the claim rather than resolved again, so a config
+    directory that moved between the two cannot leave the real lock file behind: the
+    release would read a lock this process never wrote, find no pid of its own in it,
+    and leak the original until the age rule noticed."""
+    _config_dir(tmp_path, monkeypatch)
+    j = _job()
+    with JobLock(j):
+        claimed = lock_path(j)
+        monkeypatch.setenv("SPECTRE_CONFIG_DIR", str(tmp_path / "elsewhere"))
+        assert lock_path(j) != claimed
+    assert not claimed.exists()
 
 
 def test_read_lock_is_none_for_a_missing_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
