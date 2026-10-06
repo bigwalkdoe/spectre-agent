@@ -660,39 +660,74 @@ def test_findings_that_are_not_a_list_are_ignored() -> None:
     assert any(r.id == rid for r in recent_runs(limit=200))
 
 
-def test_a_repeating_finding_refreshes_one_open_row() -> None:
-    """A standing condition must not append a new open incident on every run.
+def test_a_repeating_finding_keeps_one_row_and_its_first_seen_time() -> None:
+    """A standing condition must not append a row, nor lose track of how long it stood.
 
-    `get_security_summary` counts unresolved **rows**, so a job that runs every five
-    minutes reporting the same finding would inflate `unresolved_total` without
-    bound — and once open rows pass that summary's own thousand-row limit it would
-    truncate the newest of them, pushing genuine security-agent findings out of the
-    numbers it publishes. One standing exposure is one row, observed again.
+    `get_security_summary` publishes `oldest_unresolved_timestamp` and the Prometheus
+    exporter consumes it to report how long the oldest unresolved condition has been
+    standing. Refreshing that on every observation would make a nine-day-old backup
+    problem report as freshly seen, so the fix for unbounded growth must not buy its
+    deduplication by making a chronic condition look new.
     """
+    first_seen = datetime.now(UTC) - timedelta(days=9)
     save_run(
-        _env(job="dedup/one", payload={"findings": [{"severity": "high", "rule": "repeats", "message": "9 days"}]})
+        _env(
+            job="dedup/one",
+            payload={"findings": [{"severity": "high", "rule": "repeats", "message": "9 days"}]},
+            started_at=first_seen,
+        )
     )
     rows = _incidents("repeats")
     assert len(rows) == 1
     assert rows[0].message == "9 days"
     assert rows[0].severity == "high"
+    assert rows[0].timestamp == first_seen.replace(tzinfo=None)
 
-    later = datetime.now(UTC) + timedelta(seconds=300)
     save_run(
         _env(
             job="dedup/one",
-            payload={"findings": [{"severity": "medium", "rule": "repeats", "message": "40 days"}]},
-            started_at=later,
+            payload={"findings": [{"severity": "medium", "rule": "repeats", "message": "12 days"}]},
+            started_at=first_seen + timedelta(days=3),
         )
     )
 
     rows = _incidents("repeats")
     assert len(rows) == 1, f"a second open row was appended: {rows}"
-    assert rows[0].message == "40 days"
+    # The detail follows the latest observation...
+    assert rows[0].message == "12 days"
     assert rows[0].severity == "medium"
-    # Refreshed, not left at the first observation: the row has to say when the
-    # condition was last actually seen.
-    assert rows[0].timestamp == later.replace(tzinfo=None)
+    # ...while the age the summary publishes stays the age of the condition.
+    assert rows[0].timestamp == first_seen.replace(tzinfo=None), "first-seen time was refreshed"
+
+
+def test_first_seen_survives_many_re_observations() -> None:
+    """Repeated runs must not slowly walk a chronic condition's age back towards zero.
+
+    One refresh would be a rounding error; a job reporting every five minutes would
+    reset it a thousand times a day, and the published age would be the age of the last
+    observation rather than of the problem.
+    """
+    first_seen = datetime.now(UTC) - timedelta(days=9)
+    save_run(
+        _env(
+            job="dedup/many",
+            payload={"findings": [{"severity": "high", "rule": "chronic", "message": "9 days"}]},
+            started_at=first_seen,
+        )
+    )
+    for hour in range(1, 6):
+        save_run(
+            _env(
+                job="dedup/many",
+                payload={"findings": [{"severity": "high", "rule": "chronic", "message": f"{9 + hour} days"}]},
+                started_at=first_seen + timedelta(hours=hour),
+            )
+        )
+
+    rows = _incidents("chronic")
+    assert len(rows) == 1
+    assert rows[0].message == "14 days", "the latest detail should win"
+    assert rows[0].timestamp == first_seen.replace(tzinfo=None)
 
 
 def test_a_reoccurrence_after_resolution_opens_a_fresh_row() -> None:
