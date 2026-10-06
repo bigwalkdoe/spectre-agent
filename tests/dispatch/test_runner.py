@@ -138,6 +138,69 @@ def test_a_timeout_escalates_to_sigkill(tmp_path: Path, monkeypatch: pytest.Monk
         os.kill(int(pid_file.read_text()), 0)
 
 
+def test_sigkill_reaches_the_group_after_sigterm_has_been_offered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both halves of the module's central claim, in one run: SIGTERM first, then a
+    group-targeted SIGKILL.
+
+    Neither was pinned. `test_timeout_kills_the_process_group` proves a timeout
+    stops a backgrounded grandchild, and `test_a_timeout_escalates_to_sigkill`
+    proves a script that traps TERM is stopped anyway — but neither states *which*
+    signal reached the grandchild, and the ledger's own note on this is that a
+    child-only SIGKILL "leaves the trapped `sleep` running for 30s and passes
+    everything". A dispatcher that killed only the direct child would satisfy both
+    of those tests and orphan the work.
+
+    The action's trap logs and returns rather than exiting, so the child *does* die
+    on SIGTERM — while the grandchild, forked into the same group and ignoring
+    SIGTERM, does not. That combination is the one the escalation used to get
+    wrong: judged by the child, it looks like a clean stop, no SIGKILL is sent, and
+    the timeout is recorded while the work carries on. Four observations, and the
+    run is only correct if all four hold:
+
+    * `forked` exists — the grandchild really was up before the timeout, so an
+      absent marker means killed rather than never spawned.
+    * `saw_term` exists and reads `TERM-SEEN` — SIGTERM was delivered and the
+      action's own handler ran, so SIGKILL came after it rather than instead of it.
+      A kill-first implementation logs nothing.
+    * `marker` does not exist, three seconds after the escalation — the grandchild
+      that refused SIGTERM was stopped by the SIGKILL, so it reached the whole
+      group.
+    * the grandchild's pid no longer exists, which is a second observation of the
+      same fact rather than a restatement of the first.
+
+    The timings are not incidental. `_TERM_GRACE_SECONDS` is 2.0 and the timeout is
+    1, so the escalation lands at about t+3s; the grandchild's marker is due at
+    about t+5s and is read at about t+6s. That is a ~2s margin at each end, which is
+    what keeps this decisive on a loaded runner rather than a coin toss.
+    """
+    monkeypatch.setenv("SPECTRE_ACTIONS_ROOT", str(tmp_path))
+    saw_term = tmp_path / "saw_term"
+    forked = tmp_path / "forked"
+    pid_file = tmp_path / "grandchild.pid"
+    marker = tmp_path / "grandchild.txt"
+    body = (
+        "#!/bin/bash\n"
+        f"trap 'echo TERM-SEEN >> {saw_term}' TERM\n"
+        f"( trap '' TERM; sleep 5; touch {marker} ) &\n"
+        f"echo $! > {pid_file}\n"
+        f"touch {forked}\n"
+        "sleep 30\n"
+    )
+    got = _run(tmp_path, "stubborn-group.sh", body, timeout=1)
+
+    assert got.envelope.status.value == "timeout"
+    assert got.returncode is None
+    assert forked.exists(), "the grandchild never started, so the kill proved nothing"
+    assert saw_term.exists(), "SIGTERM never reached the action, so SIGKILL's ordering is unproven"
+    assert "TERM-SEEN" in saw_term.read_text()
+    time.sleep(3)
+    assert not marker.exists(), "a grandchild that ignored SIGTERM survived: SIGKILL did not reach the group"
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(pid_file.read_text()), 0)
+
+
 def test_exit_code_survives_a_huge_stdout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Review Focus 2 continued: truncation must not lose the verdict."""
     monkeypatch.setenv("SPECTRE_ACTIONS_ROOT", str(tmp_path))
