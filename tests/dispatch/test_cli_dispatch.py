@@ -932,16 +932,21 @@ def test_actions_verify_exits_0_when_only_advisory_findings(actions: Path, monke
     failed on them would fail CI for state the fix is supposed to remove. The fix
     is to clear the state, not to silence the check — so the check still prints,
     loudly, and exits 0.
+
+    The unclaimed script sits *inside* the actions root, because that is the only
+    place a reference is Spectre's business: a path in another project's tree is
+    that project's, and would now be dropped rather than reported.
     """
     monkeypatch.setattr(registry, "JOBS", [registry.get_job(JOB)])
-    _host(monkeypatch, HostInventory([("0 1 * * *", "/usr/local/bin/legacy.sh")], []))
+    ghost = actions / "backups" / "legacy.sh"
+    _host(monkeypatch, HostInventory([("0 1 * * *", str(ghost))], []))
 
     result = runner.invoke(app, ["actions", "verify"])
 
     assert result.exit_code == 0
     assert "legacy-path" in result.stdout
     assert "unregistered" in result.stdout
-    assert "/usr/local/bin/legacy.sh" in result.stdout
+    assert str(ghost) in result.stdout
 
 
 def test_actions_verify_exits_0_when_nothing_is_wrong(actions: Path, monkeypatch: pytest.MonkeyPatch) -> None:

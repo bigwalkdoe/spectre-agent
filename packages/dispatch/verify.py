@@ -36,6 +36,15 @@ git provenance per job, which a check that never executes anything has no use fo
 checks exactly — same expression, same order — so the two never disagree about
 whether a job is dispatchable, and reports every disagreement instead of the first.
 
+It depends on the invariant `actions_root()` documents: that it returns a
+**fully resolved** path in both of its branches, so every caller comparing a
+resolved path against it compares like with like. That invariant is load-bearing
+here twice over — a checkout that symlinks its actions directory would otherwise
+have every one of its own scripts reported as a third-party leftover, and a
+scheduler reference that is itself a symlink would be judged against the wrong
+tree. It has broken once (Ruling 15); `_ours` resolves both sides for the same
+reason and states why.
+
 **One gap, named rather than papered over.** `verify` has no finding code for "this
 host could not be inspected". It reports the unreadable sources on
 `HostInventory.unreadable` and the CLI prints them as a warning, because a code
@@ -58,12 +67,29 @@ The six codes, and what each one claims:
     carries bash's own message, because "this script is broken" is not actionable
     and "line 2: unexpected token" is.
 ``legacy-path``
-    A crontab line or a unit's `ExecStart=` calls a shell script by path, from
-    outside the actions root, instead of by `spectre run <job>`. Advisory: this is
-    the migration Plan 3 performs.
+    A crontab line or a unit's `ExecStart=` calls one of **our** scripts by path
+    instead of by `spectre run <job>`. That is the migration Plan 3 performs, and
+    being *inside* the actions root is what makes it one — a crontab line naming
+    `<root>/backups/backup-all.sh` directly is precisely the thing the plan
+    repoints at `spectre run backups/backup-all`, so skipping it here would have
+    made this check blind to the only work it exists to drive.
+
+    "Ours" is the actions root or the suite tree around it, because a suite's own
+    scripts do not all live under the actions directory. Outside both, the script
+    belongs to another package: a GitHub Actions runner's `run.sh` is not
+    Spectre's unfinished migration, and reporting it as one put a permanent floor
+    of unrelated third-party scripts under the plan's "zero legacy paths"
+    criterion — which is what made that criterion unreachable rather than unmet.
+
+    A reference whose path cannot be resolved — `ExecStart=$SUITE/f.sh`, where the
+    variable is expanded by the unit's own `Environment=`, which is not read here —
+    is reported as well, with the uncertainty in the detail instead of a guess.
+    Silent is the one outcome this module must not produce, and an entry that used
+    to be silently skipped became a live finding the moment inside-root calls
+    started counting. Advisory.
 ``unregistered``
-    A scheduler calls a script whose basename no registry job claims, so nothing
-    describes its summary, timeout or concurrency policy. Advisory.
+    A scheduler calls one of our scripts whose basename no registry job claims, so
+    nothing describes its summary, timeout or concurrency policy. Advisory.
 ``duplicate``
     Two registry jobs claim the same action basename. Blocking, and deliberately
     so: two jobs in different groups dispatching one script means one of them is
@@ -108,18 +134,33 @@ ADVISORY_CODES: frozenset[str] = frozenset({LEGACY_PATH, UNREGISTERED})
 # turns into a finding rather than a hung preflight.
 _SUBPROCESS_TIMEOUT = 10
 
-# Only `.sh` is treated as an action path. Every unit on a real host has an absolute
-# path in its `ExecStart=`, and reporting all of them as legacy would bury the
-# three entries that are. The cost is that an extensionless maintenance script is
-# not seen — stated here rather than left to be discovered.
+# Only `.sh` is treated as a script path. Every unit on a real host has an absolute
+# path in its `ExecStart=`, and most of them name a binary, so the suffix is what
+# keeps a preflight from reporting the whole of systemd. The cost is that an
+# extensionless maintenance script is not seen — stated here rather than left to be
+# discovered, and it is why a non-`.sh` reference inside the suite tree is a gap
+# rather than a decision.
 _SCRIPT_SUFFIX = ".sh"
 
 _EXEC_START_PREFIX = "ExecStart="
+
+# The command word a migrated scheduler entry uses. Matched on the basename so
+# `/usr/bin/spectre`, `spectre` and a `PATH` lookup all count — the launcher is
+# wherever the distribution put it, and what makes an entry migrated is what it
+# invokes, not where that lives.
+_DISPATCHER = "spectre"
 
 # systemd's home-directory specifier, which appears in real user units. Left
 # unexpanded it is not an absolute path, so it would match neither the actions root
 # nor anything outside it, and the entry would be silently skipped.
 _HOME_SPECIFIER = "%h"
+
+# systemd's executable prefixes: `-` ignores a non-zero exit, `@` sets argv[0], `+`
+# runs with full privileges, `!`/`!!` are sandbox markers. They are part of the
+# command word and not part of the path, and only ever appear on the first one — so
+# `ExecStart=-/opt/x.sh` is a real reference that a bare `startswith("/")` test
+# dropped on the floor.
+_SYSTEMD_EXEC_PREFIXES = "-@+!"
 
 _SYSTEM_UNIT_DIR = Path("/etc/systemd/system")
 
@@ -164,6 +205,23 @@ class Finding:
 
     code: str
     detail: str
+
+
+@dataclass(frozen=True)
+class Reference:
+    """One script path a scheduler calls, and whether this process could place it.
+
+    `resolved` is False for a reference such as `ExecStart=$SUITE/alpha.sh`, whose
+    path depends on an `Environment=` this preflight does not read. Both kinds are
+    reported under `legacy-path`, because both are a scheduler reaching a script by
+    path rather than through the dispatcher — but the detail differs, because the
+    claim differs. A resolved path can be checked against Spectre's trees; an
+    unresolved one cannot, and saying so is worth more than deciding by guess.
+    """
+
+    source: str
+    path: str
+    resolved: bool
 
 
 def _user_unit_dir() -> Path:
@@ -396,11 +454,37 @@ def _tokens(command: str) -> list[str]:
         return command.split()
 
 
+def _command_tokens(command: str) -> list[str]:
+    """`command`'s words with systemd's executable prefix off the first one.
+
+    Only the first token, because that is the only place systemd allows a prefix.
+    On every other token a leading `-` is an ordinary word character, and stripping
+    it would turn a flag that happens to start with one into a path.
+    """
+    tokens = _tokens(command)
+    if tokens:
+        stripped = tokens[0].lstrip(_SYSTEMD_EXEC_PREFIXES)
+        tokens[0] = stripped or tokens[0]
+    return tokens
+
+
 def _expand_home(token: str) -> str:
     """systemd's `%h` as a real path, so the entry can be judged at all."""
     if token == _HOME_SPECIFIER or token.startswith(f"{_HOME_SPECIFIER}/"):
         return str(Path.home()) + token[len(_HOME_SPECIFIER) :]
     return token
+
+
+def _looks_like_a_script(token: str) -> bool:
+    """Whether a token that is *not* a resolvable path still reads as a script path.
+
+    Narrow on purpose: a `/` in it or a `.sh` suffix, and nothing else. That catches
+    `$SUITE/f.sh` and `$SUITE/run` — the two forms an unread `Environment=` hides —
+    while leaving a unit's `--nofork` and a crontab's bare word alone. A rule loose
+    enough to catch those would bury the entries that are real, which is the same
+    failure as not reporting any of them.
+    """
+    return "/" in token or token.endswith(_SCRIPT_SUFFIX)
 
 
 def _exec_start_command(value: str) -> str:
@@ -413,37 +497,94 @@ def _exec_start_command(value: str) -> str:
     return text[len(_EXEC_START_PREFIX) :] if text.startswith(_EXEC_START_PREFIX) else text
 
 
-def _script_references(inventory: HostInventory) -> list[tuple[str, str]]:
-    """`(source, path)` for every absolute `.sh` path a scheduler calls.
+def _migrated_job_index(tokens: list[str]) -> int | None:
+    """The index of the job name in a `spectre run <job>` command, or `None`.
+
+    The migrated form is the one shape this whole check is driving towards, so it
+    has to produce no findings at all — including from its own job name, which
+    contains a `/` and would otherwise read as an unresolvable script path on every
+    grouped job in the registry. Skipping exactly that one argument, rather than
+    the whole command, is what keeps a wrapper that still calls a script by path
+    visible.
+    """
+    for index in range(len(tokens) - 2):
+        if tokens[index + 1] == "run" and Path(tokens[index]).name == _DISPATCHER:
+            return index + 2
+    return None
+
+
+def _collect(source: str, command: str, found: list[Reference]) -> None:
+    """Every script path in one scheduler command, appended to `found`."""
+    tokens = _command_tokens(command)
+    job_name = _migrated_job_index(tokens)
+    for index, token in enumerate(tokens):
+        if index == job_name:
+            continue
+        path = _expand_home(token)
+        if path.startswith("/"):
+            if path.endswith(_SCRIPT_SUFFIX):
+                found.append(Reference(source, path, True))
+        elif _looks_like_a_script(token):
+            found.append(Reference(source, token, False))
+
+
+def _references(inventory: HostInventory) -> list[Reference]:
+    """Every script path a scheduler calls, resolved or not.
 
     `source` names the scheduler rather than just the file, because the actionable
     fact about a legacy path is which crontab line or which unit has to change.
+
+    Which of them are Spectre's is `_ours`' judgement and deliberately not this
+    function's, so that "what do the schedulers call" stays a statement about the
+    host rather than about the migration.
     """
-    references: list[tuple[str, str]] = []
+    found: list[Reference] = []
     for schedule, command in inventory.cron_entries:
-        for token in _tokens(command):
-            path = _expand_home(token)
-            if path.startswith("/") and path.endswith(_SCRIPT_SUFFIX):
-                references.append((f"crontab: {schedule}", path))
+        _collect(f"crontab: {schedule}", command, found)
     for unit, exec_start in inventory.unit_exec_starts:
-        for token in _tokens(_exec_start_command(exec_start)):
-            path = _expand_home(token)
-            if path.startswith("/") and path.endswith(_SCRIPT_SUFFIX):
-                references.append((f"unit {unit}", path))
-    return references
+        _collect(f"unit {unit}", _exec_start_command(exec_start), found)
+    return found
 
 
-def _inside(root: Path, path: str) -> bool:
-    """Whether `path` is inside `root`, both sides resolved.
+def _suite_tree(root: Path) -> Path:
+    """The tree a reference is judged against besides the actions root itself.
 
-    Resolved on both sides for the symlink reason `actions_root` documents: a
-    checkout may symlink its actions directory, and comparing an unresolved
-    reference against a resolved root would call it legacy.
+    The actions root is `$SPECTRE_ACTIONS_ROOT`, else `<repo>/scripts`; its parent
+    is the suite root that holds the actions, which is also where the rest of the
+    suite lives once the actions move to `<repo>/spectre/actions`. A suite's own
+    scripts are not confined to the actions directory — on the host this was
+    written against, the two five-minute Prometheus exporters still running from
+    cron live in the suite's `prometheus/` directory, and they are as much
+    Spectre's leftover work as any registry job is.
+
+    A root whose parent is itself (only reachable if `SPECTRE_ACTIONS_ROOT` were
+    `/`) collapses to the root, because otherwise every absolute path on the host
+    would count as ours.
+    """
+    parent = root.parent
+    return parent if parent != root else root
+
+
+def _ours(root: Path, path: str) -> bool:
+    """Whether `path` is a script Spectre owns, and so ours to migrate.
+
+    Both sides resolved, and that is not tidiness: it is the invariant
+    `actions_root()` documents, on which this whole comparison rests — it returns a
+    resolved path in both of its branches precisely so that callers can compare a
+    resolved reference against it. A checkout that symlinks its actions directory
+    would otherwise have every one of its own scripts reported as another package's
+    leftover, which is the mirror image of the bug this predicate replaces.
+
+    Outside both trees the reference belongs to another package. That is the half
+    that makes the check mean something: a GitHub Actions runner's `run.sh` is not
+    Spectre's unfinished migration, and counting it put a permanent floor of
+    unrelated third-party scripts under the plan's success criterion.
     """
     try:
-        return Path(path).resolve().is_relative_to(root)
+        resolved = Path(path).resolve()
     except OSError:
         return False
+    return resolved.is_relative_to(root) or resolved.is_relative_to(_suite_tree(root))
 
 
 def _scheduler_findings(inventory: HostInventory) -> list[Finding]:
@@ -454,19 +595,39 @@ def _scheduler_findings(inventory: HostInventory) -> list[Finding]:
     basename however many entries name it, because the fact is a property of the
     script rather than of the reference, and a count that moved with the number of
     schedulers mentioning it would be a number about the schedulers.
+
+    Both codes are scoped by `_ours`, so both are about this suite: a scheduler
+    reaching another project's tree is that project's business, and reporting it
+    here made every count on this command a measurement of the host rather than of
+    the migration.
     """
     root = actions_root()
     claimed = {Path(job.action).name for job in registry.JOBS}
     legacy: list[Finding] = []
     unknown: dict[str, list[str]] = defaultdict(list)
 
-    for source, path in _script_references(inventory):
-        if _inside(root, path):
+    for reference in _references(inventory):
+        if not reference.resolved:
+            # Ownership is undecidable, so the detail says so instead of asserting
+            # it: a resolved reference can be checked against our trees and this one
+            # cannot, and saying "ours" here would be the guess the module's own
+            # rule forbids.
+            legacy.append(
+                Finding(
+                    LEGACY_PATH,
+                    f"{reference.source}: calls {reference.path} by path instead of `spectre run <job>`; "
+                    "the path does not resolve, so this cannot tell whether Spectre owns it",
+                )
+            )
             continue
-        legacy.append(Finding(LEGACY_PATH, f"{source}: calls {path} by path instead of `spectre run <job>`"))
-        basename = Path(path).name
+        if not _ours(root, reference.path):
+            continue
+        legacy.append(
+            Finding(LEGACY_PATH, f"{reference.source}: calls {reference.path} by path instead of `spectre run <job>`")
+        )
+        basename = Path(reference.path).name
         if basename not in claimed:
-            unknown[basename].append(source)
+            unknown[basename].append(reference.source)
 
     findings = legacy
     for basename, sources in sorted(unknown.items()):
