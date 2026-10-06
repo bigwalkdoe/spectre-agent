@@ -279,6 +279,115 @@ def test_two_distinct_actions_are_not_a_finding(tmp_path: Path, registry: pytest
     assert verify(HostInventory([], [])) == []
 
 
+# ── the invariant Plan 3 repoints the schedulers against ─────────────────────
+
+
+def test_a_scheduled_mutating_job_that_takes_no_lock_is_a_finding(tmp_path: Path, registry: pytest.MonkeyPatch) -> None:
+    """`schedule_hint` plus `mutates` must mean `concurrency="forbid"`.
+
+    This is the invariant the migration leans on and nothing enforced. Plan 3
+    repoints schedulers one at a time, verifying each, so a job carrying a
+    `schedule_hint` is one cron is about to call — and if it mutates and declares
+    `concurrency="allow"`, two of its runs can interleave with nothing to prevent
+    it. `mutates` does not help: it is recorded and badged, never acted on, so an
+    operator reading the run history would see two ordinary successful runs.
+
+    The action on disk is present and executable, so every disk code is silent and
+    this is the only finding — which is what makes it easy to miss by eye.
+    """
+    root = _root(tmp_path, registry)
+    _write(root, _ALPHA.action)
+    registry.setattr(
+        verify_mod.registry,
+        "JOBS",
+        [make_job("t/alpha.sh", group="t", mutates=True, schedule_hint="0 1 * * *", concurrency="allow")],
+    )
+
+    findings = [f for f in verify(HostInventory([], [])) if f.code == "unlocked-mutation"]
+
+    assert len(findings) == 1
+    detail = findings[0].detail
+    assert "t/alpha" in detail
+    # The schedule, because "this job takes no lock" is a registry fact and
+    # "…that is about to be scheduled" is the reason it matters.
+    assert "0 1 * * *" in detail
+    assert "'allow'" in detail
+
+
+def test_a_scheduled_mutating_job_that_locks_is_not_a_finding(tmp_path: Path, registry: pytest.MonkeyPatch) -> None:
+    """The green case, stated so the rule cannot be satisfied by dropping the check.
+
+    Every job the real registry schedules today is in this shape, and a rule with no
+    positive case would be satisfied by a `verify` that reported nothing at all.
+    """
+    root = _root(tmp_path, registry)
+    _write(root, _ALPHA.action)
+    registry.setattr(
+        verify_mod.registry,
+        "JOBS",
+        [make_job("t/alpha.sh", group="t", mutates=True, schedule_hint="0 1 * * *", concurrency="forbid")],
+    )
+
+    assert verify(HostInventory([], [])) == []
+
+
+def test_a_read_only_job_needs_no_lock_however_often_it_runs(tmp_path: Path, registry: pytest.MonkeyPatch) -> None:
+    """Read-only jobs are exempt, and the exemption is a decision worth pinning.
+
+    Two concurrent disk reports are harmless, so requiring a lock on them would buy
+    nothing and cost an exit-4 every time one overran its period — which would train
+    an operator to read "lock held" as noise, on the same code that reports a real
+    collision. The rule is about interleaving *mutations*, not about concurrency.
+    """
+    root = _root(tmp_path, registry)
+    _write(root, _ALPHA.action)
+    registry.setattr(
+        verify_mod.registry,
+        "JOBS",
+        [make_job("t/alpha.sh", group="t", mutates=False, schedule_hint="*/5 * * * *", concurrency="allow")],
+    )
+
+    assert verify(HostInventory([], [])) == []
+
+
+def test_a_mutating_job_nothing_schedules_may_still_take_no_lock(tmp_path: Path, registry: pytest.MonkeyPatch) -> None:
+    """No `schedule_hint`, no finding — the rule is about the schedulers, not the flag.
+
+    Stated as its own case because it is the one a reader is most likely to get
+    wrong in the other direction: the point of the code is that `verify` is how Plan
+    3 proves a repoint is safe, so it judges jobs a scheduler is about to call and
+    not jobs an operator may call by hand.
+    """
+    root = _root(tmp_path, registry)
+    _write(root, _ALPHA.action)
+    registry.setattr(
+        verify_mod.registry,
+        "JOBS",
+        [make_job("t/alpha.sh", group="t", mutates=True, schedule_hint=None, concurrency="allow")],
+    )
+
+    assert verify(HostInventory([], [])) == []
+
+
+def test_the_checked_in_registry_has_no_scheduled_job_without_a_lock() -> None:
+    """The real data satisfies the invariant, so the rule guards it rather than
+    merely restating today's accident.
+
+    This reads the committed registry instead of a synthetic one, which is the one
+    job in this file that is allowed to break when the registry is corrected — and
+    that is the point. `unlocked-mutation` had no rule at all, so a `schedule_hint`
+    added to any of the eleven mutating jobs that took no lock would have shipped to
+    cron with nothing to notice.
+    """
+    offenders = sorted(
+        job.name
+        for job in verify_mod.registry.JOBS
+        if job.schedule_hint and job.mutates and job.concurrency != "forbid"
+    )
+
+    assert offenders == []
+
+
 # ── the schedulers ───────────────────────────────────────────────────────────
 
 
@@ -589,16 +698,35 @@ def test_findings_come_back_in_the_documented_code_order(tmp_path: Path, registr
 
     assert codes == sorted(codes, key=verify_mod.ALL_CODES.index)
     # And the documented order itself, since "sorted by ALL_CODES" is only a claim
-    # about consistency until the order is written down somewhere.
-    assert verify_mod.ALL_CODES == ("missing", "not-executable", "syntax", "legacy-path", "unregistered", "duplicate")
+    # about consistency until the order is written down somewhere. The two
+    # registry-internal codes sit together at the end, after the three disk codes
+    # that would break a run first.
+    assert verify_mod.ALL_CODES == (
+        "missing",
+        "not-executable",
+        "syntax",
+        "legacy-path",
+        "unregistered",
+        "unlocked-mutation",
+        "duplicate",
+    )
 
 
-def test_the_blocking_codes_are_the_documented_four() -> None:
+def test_the_blocking_codes_are_the_documented_ones() -> None:
     """`legacy-path` and `unregistered` are advisory until Plan 3 clears them, and
-    making them blocking would fail CI for state the migration has not removed."""
-    assert verify_mod.BLOCKING_CODES == frozenset({"missing", "not-executable", "syntax", "duplicate"})
+    making them blocking would fail CI for state the migration has not removed.
+
+    `unlocked-mutation` is on the other side, and that is the decision: it is a
+    registry inconsistency a repoint would ship to cron, not leftover state. A gate
+    that let it pass would let `verify` certify as safe exactly the thing Plan 3
+    relies on it to prove safe.
+    """
+    assert verify_mod.BLOCKING_CODES == frozenset(
+        {"missing", "not-executable", "syntax", "unlocked-mutation", "duplicate"}
+    )
     assert verify_mod.ADVISORY_CODES == frozenset({"legacy-path", "unregistered"})
     assert verify_mod.BLOCKING_CODES | verify_mod.ADVISORY_CODES == frozenset(verify_mod.ALL_CODES)
+    assert verify_mod.BLOCKING_CODES & verify_mod.ADVISORY_CODES == frozenset()
 
 
 def test_verify_without_an_inventory_reads_the_host() -> None:

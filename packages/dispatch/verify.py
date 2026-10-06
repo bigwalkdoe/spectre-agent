@@ -90,6 +90,15 @@ The six codes, and what each one claims:
 ``unregistered``
     A scheduler calls one of our scripts whose basename no registry job claims, so
     nothing describes its summary, timeout or concurrency policy. Advisory.
+``unlocked-mutation``
+    The job declares a `schedule_hint` and `mutates`, but takes no lock. Blocking,
+    and it is the one invariant here that exists because of Plan 3 rather than
+    because of a bug: the migration repoints schedulers one at a time and verifies
+    each, so a *scheduled* mutating job is exactly what this preflight is about to
+    put on cron. With `concurrency="allow"` two of its runs interleave, and
+    nothing else in the system would notice — `mutates` is recorded and badged, not
+    enforced. Before this code the invariant held only by inspection of today's nine
+    `schedule_hint` values, and nothing kept it holding.
 ``duplicate``
     Two registry jobs claim the same action basename. Blocking, and deliberately
     so: two jobs in different groups dispatching one script means one of them is
@@ -111,22 +120,31 @@ from pathlib import Path
 from packages.dispatch import registry
 from packages.dispatch.resolve import actions_root
 
-# The six codes, in the order findings are reported: what would break a run first,
-# then what is left over from the migration.
+# The seven codes, in the order findings are reported: what would break a run
+# first, then what is left over from the migration.
 MISSING = "missing"
 NOT_EXECUTABLE = "not-executable"
 SYNTAX = "syntax"
 LEGACY_PATH = "legacy-path"
 UNREGISTERED = "unregistered"
+UNLOCKED_MUTATION = "unlocked-mutation"
 DUPLICATE = "duplicate"
 
-ALL_CODES: tuple[str, ...] = (MISSING, NOT_EXECUTABLE, SYNTAX, LEGACY_PATH, UNREGISTERED, DUPLICATE)
+ALL_CODES: tuple[str, ...] = (
+    MISSING,
+    NOT_EXECUTABLE,
+    SYNTAX,
+    LEGACY_PATH,
+    UNREGISTERED,
+    UNLOCKED_MUTATION,
+    DUPLICATE,
+)
 
 # A preflight gate fails on what would stop `spectre run`, and not on what a
 # migration has not finished cleaning up. Making the migration findings blocking
 # would fail CI for state Plan 3 exists to remove; the fix is to clear the state,
 # not to silence the check.
-BLOCKING_CODES: frozenset[str] = frozenset({MISSING, NOT_EXECUTABLE, SYNTAX, DUPLICATE})
+BLOCKING_CODES: frozenset[str] = frozenset({MISSING, NOT_EXECUTABLE, SYNTAX, UNLOCKED_MUTATION, DUPLICATE})
 ADVISORY_CODES: frozenset[str] = frozenset({LEGACY_PATH, UNREGISTERED})
 
 # Bound on every subprocess this module starts. `crontab -l` reads a spool file and
@@ -418,8 +436,38 @@ def _registry_findings() -> list[Finding]:
             if problem:
                 findings.append(Finding(SYNTAX, f"{job.name}: {target}: {problem}"))
 
+    findings.extend(_unlocked_mutation_findings())
     findings.extend(_duplicate_findings())
     return findings
+
+
+def _unlocked_mutation_findings() -> list[Finding]:
+    """Every scheduled job that mutates and takes no lock.
+
+    The rule Plan 3 depends on, and which nothing enforced: the migration repoints
+    each scheduler to `spectre run <job>` and verifies the host before and after, so
+    a job with a `schedule_hint` is one cron is about to call. If it also mutates
+    and declares `concurrency="allow"`, two of its runs can interleave, and the only
+    other signal — `mutates` — is recorded and badged for display rather than acted
+    on. An operator watching one timeout in the log would have no way to tell an
+    interleaving pair from two ordinary runs.
+
+    Read-only jobs are exempt, deliberately: two concurrent disk reports are harmless,
+    and requiring a lock on them would buy nothing at the cost of exit-4 noise every
+    time one overran its period.
+
+    The detail names the schedule, because "this job takes no lock" is a registry
+    fact and "…that Plan 3 is about to schedule it" is the reason it matters.
+    """
+    return [
+        Finding(
+            UNLOCKED_MUTATION,
+            f"{job.name}: scheduled ({job.schedule_hint}) and mutates, but concurrency is "
+            f"{job.concurrency!r}; a scheduled mutating job must take the lock",
+        )
+        for job in sorted(registry.JOBS, key=lambda entry: entry.name)
+        if job.schedule_hint and job.mutates and job.concurrency != "forbid"
+    ]
 
 
 def _duplicate_findings() -> list[Finding]:
