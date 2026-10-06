@@ -637,3 +637,38 @@ def test_monitor() -> None:
         app(["monitor"], standalone_mode=False)
     except SystemExit as e:
         assert e.code == 0
+
+
+# ── entry-point exit codes ───────────────────────────────────────────────────
+
+
+def test_python_dash_m_propagates_the_exit_code() -> None:
+    """`python -m apps.cli.main` must exit with whatever `main()` returns.
+
+    Found while wiring `spectre actions verify`, whose whole purpose is to be a CI
+    gate — and which silently could not fail. The `__main__` guard called
+    `main()` and discarded the result, so every command exited 0 under `-m`
+    whatever the code was: `run` reporting a failed action, and `verify` reporting
+    three blocking findings, both left the shell with a success. The installed
+    `spectre` entry point was never affected, because `console_scripts` wraps it in
+    `sys.exit()` — which is why this went unnoticed, and why the two ways of
+    running the same code disagreed.
+
+    A subprocess, because the defect is in the `__main__` guard: calling `main()`
+    in-process cannot observe a discarded return value. The command is
+    `run <unknown job>`, which exits 2 and reads neither the host's schedulers nor
+    the actions root — a green result here is only possible if a non-zero code
+    reaches the shell at all, and `2` rather than `1` proves the specific code
+    survived rather than some generic failure arriving in its place.
+    """
+    import subprocess
+
+    completed = subprocess.run(
+        [sys.executable, "-m", "apps.cli.main", "run", "not-a-registered-job"],
+        capture_output=True,
+        text=True,
+        cwd=os.getcwd(),
+    )
+
+    assert completed.returncode == 2, completed.stdout
+    assert "unknown job" in completed.stdout

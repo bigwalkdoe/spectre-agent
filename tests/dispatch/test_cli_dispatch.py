@@ -47,9 +47,34 @@ from apps.cli.dispatch_cmds import EXIT_FAILED, EXIT_LOCKED, EXIT_NOT_DISPATCHAB
 from apps.cli.main import app
 from packages.dispatch import registry
 from packages.dispatch.lock import lock_path
+from packages.dispatch.verify import ALL_CODES, HostInventory
 from packages.memory.db import recent_runs
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def _the_host_is_not_readable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make reading the real crontab or systemd units impossible in this file.
+
+    `spectre actions verify` is the first command here that reads the host at all,
+    and it would do so on whatever machine runs the suite: a test would then pass
+    or fail depending on that machine's units, and would read an operator's
+    schedulers without asking. Every test below injects an inventory through
+    `_host` instead; this makes forgetting impossible to miss rather than merely
+    unlikely, in the same way it does in `tests/dispatch/test_verify.py`.
+    """
+
+    def forbidden() -> HostInventory:
+        raise AssertionError("a test called read_host_inventory(); use _host(...) to inject an inventory")
+
+    monkeypatch.setattr(dispatch_cmds.verify_mod, "read_host_inventory", forbidden)
+
+
+def _host(monkeypatch: pytest.MonkeyPatch, inventory: HostInventory) -> None:
+    """Give the `verify` command a `HostInventory` instead of the real host."""
+    monkeypatch.setattr(dispatch_cmds.verify_mod, "read_host_inventory", lambda: inventory)
+
 
 # A real registry job with sudo=false and concurrency=forbid, so the lock is
 # exercised by the ordinary success and failure paths as well as by their own
@@ -700,11 +725,120 @@ def test_actions_show_missing_action_exits_3(actions: Path) -> None:
     assert result.exit_code == 3
 
 
-def test_actions_does_not_offer_verify() -> None:
-    """`verify` is a preflight that has to decide something. A stub that decides
-    nothing would advertise a capability the CLI does not have, which is the doc
-    drift `actions verify` itself exists to catch."""
+def test_actions_offers_verify() -> None:
+    """Task 8's command, replacing the assertion that it does not exist.
+
+    The test that stood here asked the CLI *not* to advertise `verify`, on the
+    grounds that a preflight which decides nothing is worse than no preflight. That
+    is still the reason it is a real command now: it decides, and the tests below
+    pin the decision.
+    """
     result = runner.invoke(app, ["actions", "--help"])
     assert result.exit_code == 0
-    assert "verify" not in result.stdout
-    assert runner.invoke(app, ["actions", "verify"]).exit_code != 0
+    assert "verify" in result.stdout
+
+
+# ── actions verify ───────────────────────────────────────────────────────────
+
+
+def test_actions_verify_exits_1_on_a_blocking_finding(actions: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exit 1 is the gate. This root holds one script, so 60 of the 61 registered
+    jobs have none — and a `verify` that passed on that would be the whole failure
+    this command exists to prevent."""
+    _host(monkeypatch, HostInventory([], []))
+
+    result = runner.invoke(app, ["actions", "verify"])
+
+    assert result.exit_code == 1
+    assert MISSING_JOB in result.stdout
+
+
+def test_actions_verify_exits_0_when_only_advisory_findings(actions: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`legacy-path` and `unregistered` are printed and do not fail the gate.
+
+    They describe a migration Plan 3 has not performed yet, and a preflight that
+    failed on them would fail CI for state the fix is supposed to remove. The fix
+    is to clear the state, not to silence the check — so the check still prints,
+    loudly, and exits 0.
+    """
+    monkeypatch.setattr(registry, "JOBS", [registry.get_job(JOB)])
+    _host(monkeypatch, HostInventory([("0 1 * * *", "/usr/local/bin/legacy.sh")], []))
+
+    result = runner.invoke(app, ["actions", "verify"])
+
+    assert result.exit_code == 0
+    assert "legacy-path" in result.stdout
+    assert "unregistered" in result.stdout
+    assert "/usr/local/bin/legacy.sh" in result.stdout
+
+
+def test_actions_verify_exits_0_when_nothing_is_wrong(actions: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The green case, so exit 0 is pinned as "checked and clean" rather than as
+    "did not crash". Both halves are empty *and* stubbed — a clean report from an
+    unread host is the failure mode, and it needs a test of its own."""
+    monkeypatch.setattr(registry, "JOBS", [registry.get_job(JOB)])
+    _host(monkeypatch, HostInventory([], []))
+
+    result = runner.invoke(app, ["actions", "verify"])
+
+    assert result.exit_code == 0
+    assert "no findings" in result.stdout
+
+
+def test_actions_verify_reports_a_duplicate_as_blocking(actions: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two jobs, one basename, both scripts present and executable — so `duplicate`
+    is the only thing that can fail the run, which is what makes it worth testing
+    on its own rather than as a side effect of a missing action."""
+    _write(actions, "t/alpha.sh", "#!/bin/bash\nexit 0\n")
+    _write(actions, "u/alpha.sh", "#!/bin/bash\nexit 0\n")
+    monkeypatch.setattr(
+        registry,
+        "JOBS",
+        [
+            replace(registry.get_job(JOB), name="t/alpha", action="t/alpha.sh", group="t"),
+            replace(registry.get_job(JOB), name="u/alpha", action="u/alpha.sh", group="u"),
+        ],
+    )
+    _host(monkeypatch, HostInventory([], []))
+
+    result = runner.invoke(app, ["actions", "verify"])
+
+    assert result.exit_code == 1
+    assert "duplicate" in result.stdout
+    assert "alpha.sh" in result.stdout
+    assert "t/alpha" in result.stdout
+
+
+def test_actions_verify_prints_every_code_even_at_zero(actions: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """All six counts, always.
+
+    A code omitted because it found nothing is indistinguishable from a code that
+    was never checked, and `actions verify`'s whole value is that the difference is
+    visible. The counts are also the baseline the migration is measured against, so
+    a run that only prints the failures cannot produce one.
+    """
+    monkeypatch.setattr(registry, "JOBS", [registry.get_job(JOB)])
+    _host(monkeypatch, HostInventory([], []))
+
+    result = runner.invoke(app, ["actions", "verify"])
+
+    for code in ALL_CODES:
+        assert code in result.stdout
+
+
+def test_actions_verify_says_so_when_it_could_not_read_the_host(actions: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unreadable scheduler is a warning, not a finding — and not silence.
+
+    A CI runner with no crontab makes `crontab -l` fail. Counting that as "nothing
+    is legacy" reports a fact about the runner rather than about the deployment, and
+    that is the specific dishonesty this command must not commit. So the
+    incompleteness is stated, on its own line, before any counts.
+    """
+    monkeypatch.setattr(registry, "JOBS", [registry.get_job(JOB)])
+    _host(monkeypatch, HostInventory([], [], ("crontab -l: exit 1: no crontab for builder",)))
+
+    result = runner.invoke(app, ["actions", "verify"])
+
+    assert "could not read" in result.stdout
+    assert "no crontab for builder" in result.stdout
+    assert "incomplete" in result.stdout
