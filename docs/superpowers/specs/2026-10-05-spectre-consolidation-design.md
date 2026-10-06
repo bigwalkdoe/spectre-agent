@@ -43,9 +43,9 @@ unique to the fork.
 ### 2.2 The suite duplicates itself
 
 Two divergent copies of the same job inside one repository:
-`maintenance/network-monitor.sh` (181 lines) vs `network/network-monitor.sh` (55);
+`maintenance/network-monitor.sh` (181 lines) vs `network/monitor-network.sh` (55);
 `maintenance/network-security-hardening.sh` (238) vs `network/…` (60);
-`maintenance/check-performance.sh` (159) vs `performance/…` (27).
+`maintenance/check-system-performance.sh` (159) vs `performance/…` (27).
 
 ### 2.3 The two repos barely talk
 

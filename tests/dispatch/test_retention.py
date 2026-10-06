@@ -13,7 +13,7 @@ the wrong reason:
   policy list produces a rule that never fires and nothing else, so the assertion is
   that every name in it resolves;
 * **the keys are full job names, not bare stems.** `MaintenanceRecord.action` holds
-  the job name, and `performance/check-performance` and `maintenance/check-performance`
+  the job name, and `performance/check-performance` and `maintenance/check-system-performance`
   are two registered jobs whose stems are both `check-performance` — so keying by stem
   would match both or neither, and neither is right;
 * **the `"unknown"` bucket is tested as the ordinary case, not an edge case.** Not one
@@ -167,23 +167,6 @@ def test_other_jobs_keep_a_year() -> None:
     job = get_job(STANDARD_JOB)
     assert job.name not in HIGH_FREQUENCY_JOBS
     assert cutoff_for(job, NOW) == NOW - STANDARD_RETENTION
-
-
-def test_two_jobs_sharing_a_stem_are_told_apart() -> None:
-    """`maintenance/check-performance` and `performance/check-performance` are two
-    registered jobs, and both stems are `check-performance`.
-
-    So the set cannot be keyed by the stem the plan's first draft used: doing so
-    would either exempt both jobs or neither, and `prune` — which deletes with
-    `WHERE action = ?` against the full name `save_run` stored — would match neither.
-    """
-    twin = get_job("maintenance/check-performance")
-    job = get_job(HIGH_FREQUENCY_JOB)
-    assert twin.name.split("/")[-1] == job.name.split("/")[-1]
-    assert twin.name != job.name
-    assert twin.name not in HIGH_FREQUENCY_JOBS
-    assert cutoff_for(twin, NOW) == NOW - STANDARD_RETENTION
-    assert cutoff_for(job, NOW) == NOW - timedelta(days=90)
 
 
 def test_a_replaced_registry_is_honoured_by_retention_and_the_registry_alike(

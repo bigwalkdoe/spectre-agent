@@ -87,7 +87,7 @@ SUMMARIES: dict[str, str] = {
     # maintenance/
     "maintenance/audit-trail": "Generate centralized audit logs for system activity",
     "maintenance/check-disk-space": "Monitor disk usage and alert on low space",
-    "maintenance/check-performance": "Monitor system performance metrics and alert on anomalies",
+    "maintenance/check-system-performance": "Monitor system performance metrics and alert on anomalies",
     "maintenance/cleanup-cache": "Remove cache files older than the configured age",
     "maintenance/cleanup-downloads": "Remove old files from the downloads directory",
     "maintenance/cleanup-logs": "Rotate and prune logs",
@@ -106,8 +106,8 @@ SUMMARIES: dict[str, str] = {
     # multi-server/
     "multi-server/manage-servers": "Manage the configured fleet of hosts",
     # network/
-    "network/network-monitor": "Monitor network connectivity and performance",
-    "network/network-security-hardening": "Apply network security best practices",
+    "network/monitor-network": "Monitor network connectivity and performance",
+    "network/harden-network-security": "Apply network security best practices",
     "network/optimize-network-config": "Tune the distribution-agnostic network configuration",
     "network/setup-vpn": "Set up WireGuard server and client configuration",
     # performance/
@@ -151,7 +151,7 @@ SUMMARIES: dict[str, str] = {
 # jobs that keep the defaults — check-disk-space, network-monitor,
 # check-performance — were audited as genuinely read-only.
 #
-# `network/network-monitor` is stated explicitly rather than left to fall out of a
+# `network/monitor-network` is stated explicitly rather than left to fall out of a
 # row it does not belong to, and it is the audit's read-only verdict applied to the
 # `network/` copy of it rather than a new judgement. Both copies ship the same
 # summary, so the sweep put a lock and a mutation flag on one of two entries
@@ -174,7 +174,7 @@ SUMMARIES: dict[str, str] = {
 # "failed", in exchange for recording a privilege the script never asks for and
 # running a network reachability probe as root. It also matches what this table
 # already records for its twin, `maintenance/network-monitor`.
-READONLY_NETWORK_JOB = "network/network-monitor"
+READONLY_NETWORK_JOB = "network/monitor-network"
 
 
 def is_mutating_network_job(name: str) -> bool:
