@@ -9,8 +9,16 @@
   happened to assert against that data would keep passing for the wrong reason —
   or start failing when the registry is fixed;
 * a check that cannot run says so instead of reporting nothing. `bash -n` failing
-  to launch, and a crontab that cannot be read, are both pinned here, because
-  "reported nothing" and "reported clean" are the same lie;
+  to launch, a crontab that cannot be read, and an `ExecStart=` naming a path this
+  process cannot resolve are all pinned here, because "reported nothing" and
+  "reported clean" are the same lie;
+* `legacy-path` and `unregistered` name *this suite's* leftovers and nobody else's.
+  Which means the predicate has to keep two cases apart — a crontab line calling
+  `<root>/backups/alpha.sh` is the migration, a unit calling some other project's
+  `run.sh` is not — and the pair is posed together rather than one test each way,
+  because the implementation this replaced dropped the first and reported the
+  second, and either test alone would have been satisfied by a predicate that
+  reported everything or nothing;
 * nothing in this file reads the host. That is enforced by an autouse fixture
   that makes `read_host_inventory()` raise, not by an assertion after the fact: an
   assertion can be deleted by accident, whereas a raise cannot be mistaken for a
@@ -274,13 +282,26 @@ def test_two_distinct_actions_are_not_a_finding(tmp_path: Path, registry: pytest
 # ── the schedulers ───────────────────────────────────────────────────────────
 
 
-def test_a_scheduler_calling_a_script_outside_the_root_is_legacy(tmp_path: Path, registry: pytest.MonkeyPatch) -> None:
+def test_a_scheduler_calling_a_script_inside_the_root_is_legacy(tmp_path: Path, registry: pytest.MonkeyPatch) -> None:
+    """The migration itself: a crontab line calling `<root>/backups/alpha.sh` directly.
+
+    This check used to do the opposite, and the inversion is the whole finding. A
+    crontab entry that reaches a reviewed action by path is precisely the legacy
+    form Plan 3 repoints at `spectre run <job>`, so treating "inside the actions
+    root" as evidence that it had already been migrated made `legacy-path` blind to
+    the only work it exists to drive — on the host it was written against, twelve of
+    fourteen crontab entries call suite scripts by path and every one of them was
+    silently discarded.
+
+    Both the absolute crontab form and the `bash <path>` unit form appear, because
+    both do on a real host and neither is the migrated shape.
+    """
     root = _root(tmp_path, registry)
-    _write(root, _ALPHA.action)
-    registry.setattr(verify_mod.registry, "JOBS", [_ALPHA])
+    script = _write(root, "backups/alpha.sh")
+    registry.setattr(verify_mod.registry, "JOBS", [make_job("backups/alpha.sh", group="backups")])
     inventory = HostInventory(
-        [("0 1 * * *", "/usr/local/bin/alpha.sh")],
-        [("legacy.service", "ExecStart=/usr/local/bin/alpha.sh")],
+        [("0 1 * * *", str(script))],
+        [("legacy.service", f"ExecStart=/bin/bash {script}")],
     )
 
     findings = [f for f in verify(inventory) if f.code == "legacy-path"]
@@ -288,39 +309,150 @@ def test_a_scheduler_calling_a_script_outside_the_root_is_legacy(tmp_path: Path,
     # One per reference, not one per script: which unit and which crontab line have
     # to change is the actionable part.
     assert len(findings) == 2
-    assert any("crontab: 0 1 * * *" in f.detail and "/usr/local/bin/alpha.sh" in f.detail for f in findings)
+    assert any("crontab: 0 1 * * *" in f.detail and str(script) in f.detail for f in findings)
     assert any("legacy.service" in f.detail for f in findings)
+    # Registered, so the companion code stays silent — the two are different facts.
+    assert "unregistered" not in _codes(verify(inventory))
 
 
-def test_a_scheduler_calling_a_script_inside_the_root_is_not_legacy(
+def test_a_scheduler_calling_another_projects_script_is_not_reported(
     tmp_path: Path, registry: pytest.MonkeyPatch
 ) -> None:
-    """Relative or absolute, inside the root is inside the root.
+    """A third-party `run.sh` is that project's business, not our leftover work.
 
-    Both forms appear on a real host — a user unit writes an absolute path, a
-    crontab line writes whatever was pasted into it — and neither is a migration
-    finding.
+    The other half of the same fix, and the half that makes the first half mean
+    something: `verify` reported only references *outside* the actions root, so
+    every finding it printed belonged to software Spectre does not own — a GitHub
+    Actions runner, a KDE helper, a distribution backup script. None will ever be
+    migrated, which put a permanent floor under the plan's success criterion.
+
+    `unregistered` is scoped the same way. "No job claims this script" is only
+    Spectre's problem for a script Spectre ships.
+    """
+    root = _root(tmp_path, registry)
+    _write(root, _ALPHA.action)
+    registry.setattr(verify_mod.registry, "JOBS", [_ALPHA])
+    inventory = HostInventory(
+        [("0 1 * * *", "/usr/libexec/actions-runner/run.sh")],
+        [("runner.service", "ExecStart=/usr/libexec/actions-runner/run.sh")],
+    )
+
+    assert verify(inventory) == []
+
+
+def test_our_script_and_a_third_party_one_are_told_apart_in_one_inventory(
+    tmp_path: Path, registry: pytest.MonkeyPatch
+) -> None:
+    """The two cases the predicate exists to keep apart, judged side by side.
+
+    A crontab line calling `<root>/backups/alpha.sh` is ours and is the migration; a
+    unit calling `/usr/libexec/whatever/run.sh` belongs to another project and is
+    none of our business. Stated in one inventory deliberately — the previous
+    implementation dropped the first and reported the second, and a pair of
+    one-direction tests would have been satisfied by a predicate that simply
+    reported or dropped everything.
+    """
+    root = _root(tmp_path, registry)
+    ours = _write(root, "backups/alpha.sh")
+    theirs = "/usr/libexec/whatever/run.sh"
+    registry.setattr(verify_mod.registry, "JOBS", [make_job("backups/alpha.sh", group="backups")])
+    inventory = HostInventory([("0 1 * * *", str(ours))], [("other.service", f"ExecStart={theirs}")])
+
+    legacy = [f for f in verify(inventory) if f.code == "legacy-path"]
+
+    assert [f.detail for f in legacy] == [
+        f"crontab: 0 1 * * *: calls {ours} by path instead of `spectre run <job>`",
+    ]
+
+
+def test_a_script_in_the_suite_tree_outside_the_actions_root_is_legacy(
+    tmp_path: Path, registry: pytest.MonkeyPatch
+) -> None:
+    """A suite's own scripts are not all under the actions directory.
+
+    The two five-minute Prometheus exporters that still run from cron on this host
+    live in the suite's `prometheus/` directory and are in neither the registry nor
+    the actions root — and they are exactly as much Spectre's leftover work as any
+    registered job, so scoping to the actions root alone would have dropped the one
+    pair Plan 3 most clearly has to replace. Hence the suite tree, the actions
+    root's parent.
+    """
+    root = _root(tmp_path, registry)
+    _write(root, _ALPHA.action)
+    registry.setattr(verify_mod.registry, "JOBS", [_ALPHA])
+    exporter = root.parent / "prometheus" / "business-metrics-exporter.sh"
+    inventory = HostInventory([("*/5 * * * *", str(exporter))], [])
+
+    findings = verify(inventory)
+
+    assert any(f.code == "legacy-path" and str(exporter) in f.detail for f in findings)
+    # And it is ours, so nothing claims it and that is reported alongside.
+    assert any(f.code == "unregistered" and "business-metrics-exporter.sh" in f.detail for f in findings)
+
+
+def test_systemds_ignore_failure_prefix_does_not_hide_a_reference(tmp_path: Path, registry: pytest.MonkeyPatch) -> None:
+    """`ExecStart=-/root/alpha.sh` means "ignore a non-zero exit", not "not a path".
+
+    systemd prefixes the executable with `-`, `@`, `+` or `!` to change what a
+    failure means. The prefix is part of the command word and not part of the path,
+    so a bare "does it start with `/`" test discarded the whole reference — and a
+    reference that cannot be judged must still be reported.
     """
     root = _root(tmp_path, registry)
     script = _write(root, _ALPHA.action)
     registry.setattr(verify_mod.registry, "JOBS", [_ALPHA])
-    inventory = HostInventory(
-        [("0 1 * * *", str(script))],
-        [("ok.service", f"ExecStart=/bin/bash {script}")],
-    )
+    inventory = HostInventory([], [("tolerant.service", f"ExecStart=-{script}")])
 
-    assert "legacy-path" not in _codes(verify(inventory))
+    findings = [f for f in verify(inventory) if f.code == "legacy-path"]
+
+    assert len(findings) == 1
+    assert str(script) in findings[0].detail
 
 
-def test_a_scheduler_already_calling_spectre_run_is_not_legacy(tmp_path: Path, registry: pytest.MonkeyPatch) -> None:
-    """The migrated form is `spectre run <job>`, which names no script at all — so
-    there is no path to call legacy. This is the shape Plan 3 migrates to, and a
-    preflight that flagged it would keep every migrated entry failing forever."""
+def test_a_reference_this_preflight_cannot_resolve_is_reported_not_dropped(
+    tmp_path: Path, registry: pytest.MonkeyPatch
+) -> None:
+    """`ExecStart=$SUITE/alpha.sh` names a real script whose path cannot be computed.
+
+    The variable is expanded by the unit's own `Environment=`, which is out of scope
+    for a preflight that reads `ExecStart=` lines, so ownership is undecidable. It
+    is still reported, and the detail says so rather than asserting an answer: a
+    check that silently drops an entry it could not judge is indistinguishable from
+    one that found nothing there, which is the failure this module exists to avoid.
+    """
     root = _root(tmp_path, registry)
     _write(root, _ALPHA.action)
     registry.setattr(verify_mod.registry, "JOBS", [_ALPHA])
+    inventory = HostInventory([], [("templated.service", "ExecStart=$SUITE/alpha.sh")])
 
-    inventory = HostInventory([("0 1 * * *", "spectre run t/alpha")], [("ok.service", "ExecStart=spectre run t/alpha")])
+    findings = [f for f in verify(inventory) if f.code == "legacy-path"]
+
+    assert len(findings) == 1
+    detail = findings[0].detail
+    assert "$SUITE/alpha.sh" in detail
+    assert "does not resolve" in detail
+    # The honest part: it must not claim to know whose script this is.
+    assert "cannot tell whether" in detail
+
+
+def test_a_scheduler_already_calling_spectre_run_is_not_legacy(tmp_path: Path, registry: pytest.MonkeyPatch) -> None:
+    """The migrated form is `spectre run <job>`, which names no script at all.
+
+    This is the shape Plan 3 migrates to, and a preflight that flagged it would
+    keep every migrated entry failing forever — so the job name is skipped
+    explicitly. It has to be: 40 of the 61 registered names contain a `/`, so a
+    `spectre run backups/backup-all` whose job name was read as an unresolvable
+    script path would report a finding for every entry Plan 3 had already fixed,
+    which is the same anti-correlation this check was corrected for, one level up.
+    """
+    root = _root(tmp_path, registry)
+    _write(root, "backups/alpha.sh")
+    registry.setattr(verify_mod.registry, "JOBS", [make_job("backups/alpha.sh", group="backups")])
+
+    inventory = HostInventory(
+        [("0 1 * * *", "spectre run backups/alpha")],
+        [("ok.service", "ExecStart=/usr/bin/spectre run backups/alpha")],
+    )
 
     assert verify(inventory) == []
 
@@ -331,7 +463,8 @@ def test_a_scheduler_naming_an_unregistered_script_is_a_finding(tmp_path: Path, 
     root = _root(tmp_path, registry)
     _write(root, _ALPHA.action)
     registry.setattr(verify_mod.registry, "JOBS", [_ALPHA])
-    inventory = HostInventory([("0 1 * * *", "/x/scripts/backups/ghost.sh")], [])
+    ghost = root / "backups" / "ghost.sh"
+    inventory = HostInventory([("0 1 * * *", str(ghost))], [])
 
     findings = [f for f in verify(inventory) if f.code == "unregistered"]
 
@@ -349,11 +482,12 @@ def test_an_unregistered_script_is_reported_once_however_many_entries_name_it(
     detail is "these two reach it". Repeating the finding per reference would make
     the count a function of how many schedulers happen to mention it.
     """
-    _root(tmp_path, registry)
+    root = _root(tmp_path, registry)
     registry.setattr(verify_mod.registry, "JOBS", [_ALPHA])
+    ghost = root / "ghost.sh"
     inventory = HostInventory(
-        [("0 1 * * *", "/x/ghost.sh"), ("0 2 * * *", "/x/ghost.sh")],
-        [("a.service", "ExecStart=/x/ghost.sh")],
+        [("0 1 * * *", str(ghost)), ("0 2 * * *", str(ghost))],
+        [("a.service", f"ExecStart={ghost}")],
     )
 
     findings = [f for f in verify(inventory) if f.code == "unregistered"]
@@ -371,20 +505,20 @@ def test_a_units_percent_h_is_expanded_before_being_judged(tmp_path: Path, regis
     Silent is the one outcome this command must not produce.
 
     `$HOME` is set rather than a helper being replaced, so the code under test is
-    the one that runs on a real host.
+    the one that runs on a real host. `HOME` is the *parent* of the actions root, so
+    the expanded path lands inside it and the entry is one of ours — which is what
+    makes the expansion observable in the finding rather than in its absence.
     """
     root = _root(tmp_path, registry)
     _write(root, _ALPHA.action)
-    home = tmp_path / "home"
-    home.mkdir()
-    registry.setenv("HOME", str(home))
+    registry.setenv("HOME", str(tmp_path))
     registry.setattr(verify_mod.registry, "JOBS", [_ALPHA])
-    inventory = HostInventory([], [("fedora.service", "ExecStart=%h/.local/bin/backup.sh")])
+    inventory = HostInventory([], [("templated.service", "ExecStart=%h/scripts/t/alpha.sh")])
 
     findings = [f for f in verify(inventory) if f.code == "legacy-path"]
 
     assert len(findings) == 1
-    assert str(home / ".local/bin/backup.sh") in findings[0].detail
+    assert str(root / "t" / "alpha.sh") in findings[0].detail
 
 
 def test_a_command_without_a_script_path_is_ignored(tmp_path: Path, registry: pytest.MonkeyPatch) -> None:
@@ -396,6 +530,34 @@ def test_a_command_without_a_script_path_is_ignored(tmp_path: Path, registry: py
     inventory = HostInventory(
         [("0 1 * * *", "/usr/bin/python3 -m apps.daemon.main")],
         [("daemon.service", 'ExecStart=/usr/share/code/bin/code-tunnel "--verbose" tunnel service')],
+    )
+
+    assert verify(inventory) == []
+
+
+def test_ordinary_unit_words_are_not_read_as_unresolvable_script_paths(
+    tmp_path: Path, registry: pytest.MonkeyPatch
+) -> None:
+    """The unresolvable bucket is narrow, because the alternative is a flood.
+
+    Every non-absolute word in a unit command is a candidate for "a script path we
+    cannot place", and almost all of them are flags, argv[0]s or bare verbs. These
+    are the words of the units on the host this was written against: a rule loose
+    enough to catch them would bury the entries that are real, which is the same
+    failure as reporting none of them.
+    """
+    root = _root(tmp_path, registry)
+    _write(root, _ALPHA.action)
+    registry.setenv("HOME", str(tmp_path))
+    registry.setattr(verify_mod.registry, "JOBS", [_ALPHA])
+    inventory = HostInventory(
+        [],
+        [
+            ("dbus.service", "ExecStart=/usr/bin/dbus-daemon --system --nofork $DBUS_ARGS"),
+            ("gateway.service", "ExecStart=/usr/bin/hermes gateway run"),
+            ("wg-quick@.service", "ExecStart=/usr/bin/wg-quick %i up"),
+            ("api.service", "ExecStart=/usr/bin/python3 -m uvicorn apps.api.main:app --port 8106"),
+        ],
     )
 
     assert verify(inventory) == []
@@ -419,7 +581,9 @@ def test_findings_come_back_in_the_documented_code_order(tmp_path: Path, registr
             make_job("network/network-monitor.sh", group="network"),
         ],
     )
-    inventory = HostInventory([("0 1 * * *", "/x/ghost.sh")], [])
+    # Inside the actions root, so this entry is one of ours and exercises the sort
+    # across codes; outside it, the scheduler half would have nothing to order.
+    inventory = HostInventory([("0 1 * * *", str(root / "ghost.sh"))], [])
 
     codes = _codes(verify(inventory))
 
