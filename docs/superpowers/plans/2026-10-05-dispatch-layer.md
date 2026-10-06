@@ -699,12 +699,13 @@ from packages.memory.db import MaintenanceRecord, recent_runs, save_run
 from packages.dispatch.envelope import Envelope, Status
 
 
-def _env(job: str = "backups/backup-all", status: Status = Status.SUCCESS) -> Envelope:
+def _env(job: str = "backups/backup-all", status: Status = Status.SUCCESS,
+         payload: dict | None = None) -> Envelope:
     return Envelope(
         job=job, trigger="cron", started_at=datetime.now(UTC), duration_ms=5,
         exit_code=0, resolved_path="/x/backup-all.sh", git_commit="f493805",
         git_dirty=True, stdout_tail="out", stderr_tail="err",
-        status=status, payload={"metrics": {"bytes": 42}},
+        status=status, payload=payload if payload is not None else {"metrics": {"bytes": 42}},
     )
 
 
@@ -799,12 +800,10 @@ def test_findings_in_a_payload_become_security_incidents() -> None:
     so /api/security/summary and the exporter see both producers."""
     from packages.memory.db import get_security_incidents
 
-    e = _env()
-    object.__setattr__(e, "payload", {"findings": [
+    save_run(_env(payload={"findings": [
         {"severity": "high", "rule": "backup-stale", "message": "last dump is 9 days old"},
         {"severity": "low", "rule": "log-noise", "message": "…"},
-    ]})
-    save_run(e)
+    ]}))
     incidents = get_security_incidents(resolved=True, limit=200)
     assert {"backup-stale", "log-noise"} <= {i.rule_id for i in incidents}
     assert next(i for i in incidents if i.rule_id == "backup-stale").severity == "high"
