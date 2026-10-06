@@ -52,8 +52,31 @@ def test_override_table_matches_the_committed_registry() -> None:
         "mutates": True,
         "concurrency": "forbid",
     }
-    assert gen_registry.overrides_for("network/setup-vpn") == {"sudo": True, "mutates": True}
+    assert gen_registry.overrides_for("network/setup-vpn") == {
+        "sudo": True,
+        "mutates": True,
+        "concurrency": "forbid",
+    }
     assert gen_registry.overrides_for("maintenance/check-disk-space") == {}
+
+
+def test_every_override_that_mutates_also_locks() -> None:
+    """The table cannot express "this job mutates but takes no lock".
+
+    Four rows used to pair `mutates` with `concurrency: "forbid"` and four did not,
+    which left eleven jobs mutating without a lock. The hazard is not those eleven
+    on their own — none declared a `schedule_hint`, so nothing automated could fire
+    them — it is that the answer depended on which row you read, so the next job
+    added to either column inherits the question. `concurrency` is the only field in
+    the registry that changes what a run does, so `mutates` without it is a flag
+    nothing reads.
+
+    Stated over the table rather than over the committed data, because the table is
+    where the decision is made and the data is only its output.
+    """
+    for matcher, values in gen_registry.OVERRIDES:
+        if values.get("mutates"):
+            assert values.get("concurrency") == "forbid", f"a mutating override does not lock: {matcher}"
 
 
 def test_generated_entries_omit_every_default_valued_key() -> None:

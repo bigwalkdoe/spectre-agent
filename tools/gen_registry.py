@@ -135,6 +135,16 @@ SUMMARIES: dict[str, str] = {
 
 # The plan's override table, as (matcher, overrides). First match wins.
 #
+# **Every row that sets `mutates` also sets `concurrency: "forbid"`.** They are one
+# decision, not two: `concurrency` is the only field in the registry that changes
+# what a run does, so a `mutates: True` without it is a flag nothing reads. Four
+# rows here paired them and four did not, which left the 11 jobs below mutating
+# without a lock — and it held only because none of them declared a
+# `schedule_hint`, i.e. only by inspection of today's data. That is exactly the
+# invariant `verify`'s `unlocked-mutation` code now enforces, and a table where the
+# answer to "does this row lock?" depends on which row you are reading is how the
+# next eleven get it wrong too.
+#
 # `maintenance/vacuum-databases` is not in the plan's table; it was added on
 # 2026-10-06 after an audit of all 14 scheduled jobs found VACUUM/ANALYZE to be
 # the only one wrongly left at the read-only defaults. The other three scheduled
@@ -146,9 +156,9 @@ OVERRIDES: list[tuple[Any, dict[str, Any]]] = [
     (lambda n: n == "maintenance/run-maintenance", {"mutates": True, "concurrency": "forbid"}),
     (lambda n: n == "maintenance/vacuum-databases", {"mutates": True, "concurrency": "forbid"}),
     (lambda n: n.startswith("security/"), {"sudo": True, "mutates": True, "concurrency": "forbid"}),
-    (lambda n: n.startswith("network/"), {"sudo": True, "mutates": True}),
-    (lambda n: n.startswith("performance/optimize-"), {"sudo": True, "mutates": True}),
-    (lambda n: n.startswith(("deploy-", "setup-")), {"sudo": True, "mutates": True}),
+    (lambda n: n.startswith("network/"), {"sudo": True, "mutates": True, "concurrency": "forbid"}),
+    (lambda n: n.startswith("performance/optimize-"), {"sudo": True, "mutates": True, "concurrency": "forbid"}),
+    (lambda n: n.startswith(("deploy-", "setup-")), {"sudo": True, "mutates": True, "concurrency": "forbid"}),
     (lambda n: n.startswith("project-specific/"), {"mutates": True, "concurrency": "forbid"}),
 ]
 

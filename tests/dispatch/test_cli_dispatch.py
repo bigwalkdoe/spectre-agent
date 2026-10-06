@@ -1078,8 +1078,44 @@ def test_actions_verify_reports_a_duplicate_as_blocking(actions: Path, monkeypat
     assert "t/alpha" in result.stdout
 
 
+def test_actions_verify_reports_a_scheduled_unlocked_mutation_as_blocking(
+    actions: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The new code has to fail the gate, or it is a note rather than a rule.
+
+    Asserted through the CLI because that is where the classification matters: it is
+    `BLOCKING_CODES` that decides the exit, and a code added to `ALL_CODES` but left
+    advisory would print a finding and certify the host anyway — which for this one
+    would mean `verify` certifying as safe the exact job Plan 3 is about to schedule.
+
+    `JOB` is replaced rather than added to, so this stays a single-code report and
+    cannot pass by having some other blocking finding alongside it.
+    """
+    _write(actions, "backups/backup-all.sh", "#!/bin/bash\nexit 0\n")
+    monkeypatch.setattr(
+        registry,
+        "JOBS",
+        [
+            replace(
+                registry.get_job(JOB),
+                mutates=True,
+                schedule_hint="0 1 * * *",
+                concurrency="allow",
+            )
+        ],
+    )
+    _host(monkeypatch, HostInventory([], []))
+
+    result = runner.invoke(app, ["actions", "verify"])
+
+    assert result.exit_code == 1
+    assert "unlocked-mutation" in result.stdout
+    assert JOB in result.stdout
+    assert "0 1 * * *" in result.stdout
+
+
 def test_actions_verify_prints_every_code_even_at_zero(actions: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """All six counts, always.
+    """All seven counts, always.
 
     A code omitted because it found nothing is indistinguishable from a code that
     was never checked, and `actions verify`'s whole value is that the difference is

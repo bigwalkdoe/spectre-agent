@@ -138,7 +138,8 @@
     "group": "deploy-enhanced-monitoring",
     "summary": "Deploy the enhanced monitoring components",
     "sudo": true,
-    "mutates": true
+    "mutates": true,
+    "concurrency": "forbid"
   },
   {
     "name": "deploy-monitoring",
@@ -146,7 +147,8 @@
     "group": "deploy-monitoring",
     "summary": "Deploy the Prometheus and Grafana monitoring stack",
     "sudo": true,
-    "mutates": true
+    "mutates": true,
+    "concurrency": "forbid"
   },
   {
     "name": "detect-distribution",
@@ -314,7 +316,8 @@
     "group": "network",
     "summary": "Monitor network connectivity and performance",
     "sudo": true,
-    "mutates": true
+    "mutates": true,
+    "concurrency": "forbid"
   },
   {
     "name": "network/network-security-hardening",
@@ -322,7 +325,8 @@
     "group": "network",
     "summary": "Apply network security best practices",
     "sudo": true,
-    "mutates": true
+    "mutates": true,
+    "concurrency": "forbid"
   },
   {
     "name": "network/optimize-network-config",
@@ -330,7 +334,8 @@
     "group": "network",
     "summary": "Tune the distribution-agnostic network configuration",
     "sudo": true,
-    "mutates": true
+    "mutates": true,
+    "concurrency": "forbid"
   },
   {
     "name": "network/setup-vpn",
@@ -338,7 +343,8 @@
     "group": "network",
     "summary": "Set up WireGuard server and client configuration",
     "sudo": true,
-    "mutates": true
+    "mutates": true,
+    "concurrency": "forbid"
   },
   {
     "name": "performance/check-performance",
@@ -362,7 +368,8 @@
     "group": "performance",
     "summary": "Set resource limits on Compose containers",
     "sudo": true,
-    "mutates": true
+    "mutates": true,
+    "concurrency": "forbid"
   },
   {
     "name": "performance/optimize-system-performance",
@@ -370,7 +377,8 @@
     "group": "performance",
     "summary": "Apply system performance optimizations",
     "sudo": true,
-    "mutates": true
+    "mutates": true,
+    "concurrency": "forbid"
   },
   {
     "name": "performance/resource-rightsizing",
@@ -502,7 +510,8 @@
     "group": "setup-grafana-dashboards",
     "summary": "Install the Grafana dashboards",
     "sudo": true,
-    "mutates": true
+    "mutates": true,
+    "concurrency": "forbid"
   },
   {
     "name": "setup-notification-channels",
@@ -510,7 +519,8 @@
     "group": "setup-notification-channels",
     "summary": "Configure Alertmanager notification channels and prove delivery",
     "sudo": true,
-    "mutates": true
+    "mutates": true,
+    "concurrency": "forbid"
   },
   {
     "name": "setup-prometheus-alerts",
@@ -518,6 +528,7 @@
     "group": "setup-prometheus-alerts",
     "summary": "Copy the Prometheus alert rules into the Prometheus container",
     "sudo": true,
-    "mutates": true
+    "mutates": true,
+    "concurrency": "forbid"
   }
 ]
