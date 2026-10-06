@@ -28,12 +28,14 @@ in over both modules' engines, so `prune` here cannot delete a row any other tes
 
 from __future__ import annotations
 
+import sqlite3
 from collections.abc import Iterator
+from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError
 from sqlmodel import Session, SQLModel, create_engine
@@ -48,6 +50,7 @@ from packages.dispatch.retention import (
     cutoff_for,
     prune,
     record_growth,
+    rows_past_cutoff,
 )
 from packages.memory import db as db_module
 from packages.memory.db import MaintenanceRecord, save_run
@@ -296,10 +299,101 @@ def test_prune_raises_on_a_database_with_no_run_records(tmp_path: Path, monkeypa
     empty dict here would be indistinguishable from "nothing was old", on the one host
     where running it means something is wrong.
     """
-    empty = create_engine(f"sqlite:///{tmp_path / 'empty.db'}")
-    monkeypatch.setattr(retention, "engine", empty)
+    target = tmp_path / "empty.db"
+    empty = create_engine(f"sqlite:///{target}")
+    SQLModel.metadata.create_all(empty)
+    empty.dispose()
+    with closing(sqlite3.connect(target)) as connection:
+        connection.execute("DROP TABLE maintenancerecord")
+    monkeypatch.setattr(retention, "engine", create_engine(f"sqlite:///{target}"))
     with pytest.raises(OperationalError, match="maintenancerecord"):
         prune(NOW)
+
+
+def test_prune_refuses_to_create_a_store_that_is_not_there(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A sweep asked of a host with no database must not hand it one.
+
+    The obvious implementation connects, and connecting is what creates the file — so
+    `prune` against a fresh host would leave an empty database behind and report that
+    nothing was old, which is a fabrication on both counts. The file check happens
+    before any connection is opened, which is the only order in which "asking" is free.
+    """
+    target = tmp_path / "cfg" / "memory.db"
+    monkeypatch.setattr(retention, "engine", create_engine(f"sqlite:///{target}"))
+
+    with pytest.raises(FileNotFoundError, match="no run store"):
+        prune(NOW)
+    assert not target.exists()
+    assert not (tmp_path / "cfg").exists(), "connecting is what creates a SQLite file"
+
+
+def test_record_growth_refuses_to_create_a_store_that_is_not_there(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same property on the read path, which is the one `spectre actions list` takes.
+
+    `actions list` is how an operator finds out what they can run. A command that
+    answers that question by creating a 4 KiB file in a config directory it was only
+    reading is a regression, and it is one that also fails outright wherever the config
+    directory cannot be created at all.
+    """
+    target = tmp_path / "cfg" / "memory.db"
+    monkeypatch.setattr(retention, "engine", create_engine(f"sqlite:///{target}"))
+
+    with pytest.raises(FileNotFoundError, match="no run store"):
+        record_growth()
+    assert not (tmp_path / "cfg").exists()
+
+
+# ── rows_past_cutoff ──────────────────────────────────────────────────────────
+
+
+def test_rows_past_cutoff_reports_the_sweep_without_deleting(engine: Engine) -> None:
+    """The measurement is the guard before a sweep, so it has to be exact and inert.
+
+    Exact: the same keys and the same counts `prune` then reports, which is only true
+    because both read one plan — a measurement that drifted from the sweep would be
+    worse than none, since it would be believed. Inert: every row still there
+    afterwards.
+    """
+    year = NOW - STANDARD_RETENTION
+    expired = _put(engine, STANDARD_JOB, year - timedelta(days=1))
+    kept = _put(engine, STANDARD_JOB, NOW)
+    _put(engine, HIGH_FREQUENCY_JOB, NOW - timedelta(days=200))
+    _put(engine, LEGACY_ACTION, year - timedelta(days=1))
+
+    predicted = {STANDARD_JOB: 1, HIGH_FREQUENCY_JOB: 1, UNKNOWN_JOB: 1}
+    assert rows_past_cutoff(NOW) == predicted
+    # Inert: both rows of the expired job are still there, the old one included.
+    assert _rows(engine, STANDARD_JOB) == [expired, kept]
+    assert prune(NOW) == predicted, "the sweep must match what it promised"
+    assert rows_past_cutoff(NOW) == {}
+
+
+def test_rows_past_cutoff_does_not_create_a_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    target = tmp_path / "cfg" / "memory.db"
+    monkeypatch.setattr(retention, "engine", create_engine(f"sqlite:///{target}"))
+    with pytest.raises(FileNotFoundError, match="no run store"):
+        rows_past_cutoff(NOW)
+    assert not (tmp_path / "cfg").exists()
+
+
+def test_the_measurement_holds_the_store_read_only(engine: Engine) -> None:
+    """Proven by trying to write through the session, not by reading a URL string.
+
+    A read-only *connection* is the difference between a measurement that cannot change
+    the data and one that merely issued no DELETE, and only SQLite can say which one
+    this is. Without the `mode=ro` this still passes every "did not delete" assertion,
+    because `rows_past_cutoff` would simply not be issuing the write.
+    """
+    _put(engine, STANDARD_JOB, NOW)
+    with retention._read_only_session() as session:
+        assert (
+            session.execute(select(func.count()).select_from(SQLModel.metadata.tables["maintenancerecord"])).scalar()
+            == 1
+        )
+        with pytest.raises(OperationalError, match="readonly"):
+            session.execute(delete(MaintenanceRecord))
 
 
 # ── record_growth ────────────────────────────────────────────────────────────

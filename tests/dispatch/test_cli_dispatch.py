@@ -781,6 +781,35 @@ def test_actions_list_does_not_pad_the_rows_column(tmp_path: Path, monkeypatch: 
     assert [line for line in lines if line != line.rstrip()] == []
 
 
+def test_actions_list_leaves_no_database_behind_on_a_fresh_config_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Asking what can be run must not leave storage behind.
+
+    `actions list` is the read-only discovery command, and R4's property to preserve is
+    that it touched *nothing*. Connecting to SQLite creates the file, so a growth column
+    that queries unconditionally would hand every fresh install a 4 KiB `memory.db` — and
+    fail outright wherever the config directory cannot be created, which is a worse
+    failure than the one the column was there to prevent.
+
+    Asserted on the config *directory* rather than the whole tree, and with the
+    directory present — which is the real shape of a fresh host, since anything else
+    that has run already created `~/.config/spectre`. A missing directory would hide
+    the regression: SQLite cannot create a file inside a directory that does not exist
+    either, so a connecting implementation would fail, render `-` and pass.
+    """
+    config = tmp_path / "cfg"
+    config.mkdir()
+    monkeypatch.setattr(retention, "engine", create_engine(f"sqlite:///{config / 'memory.db'}"))
+    result = runner.invoke(app, ["actions", "list"])
+
+    assert result.exit_code == 0
+    table = _listing(result.stdout)
+    assert set(table) == {job.name for job in registry.JOBS}
+    assert {row["rows"] for row in table.values()} == {"-"}
+    assert list(config.iterdir()) == [], "a read-only discovery command created something"
+
+
 def test_actions_list_lists_every_job_when_the_store_has_no_run_table(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
