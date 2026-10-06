@@ -34,6 +34,8 @@ from __future__ import annotations
 import json
 import os
 import stat
+import subprocess
+import sys
 import time
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -369,7 +371,6 @@ def test_run_records_into_a_database_that_did_not_exist(
 
 def test_run_records_a_real_commit_when_actions_are_a_repo(actions: Path) -> None:
     """Full wiring: resolve -> provenance -> run record, against a real repository."""
-    import subprocess
 
     env = {
         "GIT_CONFIG_GLOBAL": "/dev/null",
@@ -1147,3 +1148,45 @@ def test_actions_verify_says_so_when_it_could_not_read_the_host(actions: Path, m
     assert "could not read" in result.stdout
     assert "no crontab for builder" in result.stdout
     assert "incomplete" in result.stdout
+
+
+def test_python_m_actions_verify_exits_1_when_a_finding_is_blocking(actions: Path, tmp_path: Path) -> None:
+    """`python -m apps.cli.main actions verify` must be able to fail.
+
+    Every other test here goes through Click's `CliRunner`, which calls the Typer
+    app directly and therefore never touches `__main__`. That path is the one that
+    regressed: the module ended in a bare `main()`, and `raise SystemExit(main())`
+    is what makes `python -m` agree with the installed console script — which is
+    wrapped in `sys.exit()` by `console_scripts` and so always propagated the return
+    value. With the bare call, every command exited 0 whatever it reported,
+    including `actions verify`, a CI gate that could not fail.
+
+    So this runs the module as a subprocess and reads the real exit status, with a
+    registry whose only job is absent: one blocking finding, no other reason to
+    fail. `SPECTRE_ACTIONS_ROOT` and `SPECTRE_CONFIG_DIR` are set in the child's
+    environment rather than through `monkeypatch`, because a subprocess does not
+    inherit the parent's monkeypatching — and the config dir matters, since
+    `packages.memory.db` resolves `DB_FILE` at import and an unset variable would
+    put this test on the live database.
+    """
+    env = {
+        **os.environ,
+        "SPECTRE_ACTIONS_ROOT": str(actions),
+        "SPECTRE_CONFIG_DIR": str(tmp_path / "cfg"),
+        "PYTHONPATH": str(Path(__file__).resolve().parents[2]),
+    }
+
+    completed = subprocess.run(
+        [sys.executable, "-m", "apps.cli.main", "actions", "verify"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+        cwd=str(Path(__file__).resolve().parents[2]),
+    )
+
+    assert completed.returncode == 1, completed.stdout + completed.stderr
+    # The report reached the terminal too, so the exit is the report's verdict and
+    # not a crash on the way out.
+    assert "missing" in completed.stdout
+    assert MISSING_JOB in completed.stdout
