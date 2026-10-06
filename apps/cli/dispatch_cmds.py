@@ -21,6 +21,29 @@ see, and there is only one thing to get right here, so it is worth stating plain
  ``1``  an unexpected exception — see below
 ======  ==========================================================
 
+``spectre actions verify`` has its own, much smaller contract, because it dispatches
+nothing and its exit code is a CI gate rather than a run result:
+
+======  ==========================================================
+ code   meaning
+======  ==========================================================
+ ``0``  every registered job is dispatchable and no blocking
+        finding stands — which may still be true with
+        ``legacy-path`` or ``unregistered`` findings, which are
+        printed and advisory until Plan 3 migrates the schedulers
+ ``1``  at least one of ``missing``, ``not-executable``,
+        ``syntax`` or ``duplicate``
+======  ==========================================================
+
+That ``1`` collides with the catch-all above, and the collision is deliberate rather
+than accidental: a preflight that failed with ``3`` would be reporting one job's
+state as if it were the whole verdict, and one that failed with ``5`` would say an
+action ran when none did. Of the codes on offer, ``1`` — "something is wrong" — is
+the only honest one, and a caller that cannot tell it from `main.py`'s catch-all
+learns it from the report's `verdict:` line, which says how many blocking findings
+there were. The alternative was a new code, and a code nothing else in the project
+returns is worse than a documented overlap.
+
 Cron reads those numbers and nothing else, so each refusal prints the one fact the
 operator needs to act: the path that is missing, the pid holding the lock and since
 when, the command to run instead. `3` and `4` describe the invocation and `5`
@@ -73,16 +96,19 @@ from typing import Annotated
 import typer
 
 from packages.dispatch import registry
+from packages.dispatch import verify as verify_mod
 from packages.dispatch.envelope import Status
 from packages.dispatch.lock import JobLock, LockUnavailable
 from packages.dispatch.registry import Job
-from packages.dispatch.resolve import DispatchError, ResolvedAction, resolve
+from packages.dispatch.resolve import DispatchError, ResolvedAction, actions_root, resolve
 from packages.dispatch.runner import run_action
+from packages.dispatch.verify import Finding
 from packages.memory.db import init_db, save_run
 
 # The exit codes, named so a reader does not have to count down a table to find
 # which one a `raise typer.Exit` carries.
 EXIT_OK = 0
+EXIT_FINDINGS = 1
 EXIT_UNKNOWN_JOB = 2
 EXIT_NOT_DISPATCHABLE = 3
 EXIT_LOCKED = 4
@@ -280,6 +306,97 @@ def actions_show(job: str) -> None:
         typer.echo(str(e))
         raise typer.Exit(e.exit_code) from None
     _describe(entry, resolved)
+
+
+# ── actions verify ───────────────────────────────────────────────────────────
+
+# Findings are indented under their code, and the counts are the block an operator
+# reads and CI diffs. Both are plain aligned text for the same reason `actions
+# list` is — see `_print_verify_report`.
+_VERIFY_INDENT = "  "
+
+
+def _print_verify_report(inventory_unreadable: tuple[str, ...], findings: list[Finding]) -> None:
+    """The report: what was checked, what was found, and how each code is weighted.
+
+    Plain aligned text rather than a Rich table, for the same reason `actions list`
+    is: Rich fits columns to the terminal width and wraps or truncates what does
+    not fit, and on an 80-column terminal the path — the one field an operator has
+    to copy into a ticket — is exactly what gets broken. This output is read by
+    grep at least as often as by eye, and a run of 61 missing actions has to stay
+    greppable.
+
+    **All six counts are printed, including the zeroes.** A code omitted because it
+    found nothing is indistinguishable from a code that was never checked, and being
+    able to tell those apart is the entire value of a preflight. It is also what
+    makes the counts a baseline: the migration's before and after have to be
+    comparable, and a run that prints only its failures produces no number to
+    compare.
+
+    The unreadable-source warning comes first and says the word "incomplete",
+    because an unread scheduler half must not read as an empty one.
+    """
+    typer.echo(f"actions root: {actions_root()}")
+    typer.echo(f"registry:     {len(registry.JOBS)} jobs")
+    typer.echo("")
+
+    if inventory_unreadable:
+        typer.echo("WARNING: could not read — the scheduler half of this report is incomplete:")
+        for reason in inventory_unreadable:
+            typer.echo(f"{_VERIFY_INDENT}{reason}")
+        typer.echo("")
+
+    counts = {code: 0 for code in verify_mod.ALL_CODES}
+    for finding in findings:
+        counts[finding.code] += 1
+
+    width = max(len(code) for code in verify_mod.ALL_CODES)
+    for heading, codes in (
+        ("blocking — any of these fails the gate:", verify_mod.BLOCKING_CODES),
+        ("advisory — reported, not gated, until the schedulers are migrated:", verify_mod.ADVISORY_CODES),
+    ):
+        typer.echo(heading)
+        for code in verify_mod.ALL_CODES:
+            if code in codes:
+                typer.echo(f"{_VERIFY_INDENT}{code:<{width}}  {counts[code]:>4}")
+        typer.echo("")
+
+    if not findings:
+        typer.echo("no findings")
+        return
+
+    for code in verify_mod.ALL_CODES:
+        matching = [finding for finding in findings if finding.code == code]
+        if matching:
+            typer.echo(f"{code} ({len(matching)}):")
+            for finding in matching:
+                typer.echo(f"{_VERIFY_INDENT}{finding.detail}")
+
+
+@actions_app.command("verify")
+def actions_verify() -> None:
+    """Preflight the registry, the actions on disk and the host's schedulers.
+
+    Exit 0 when nothing blocking was found, 1 when something was. `legacy-path`
+    and `unregistered` describe the migration this plan has not performed yet, so
+    they are reported and do not fail the gate — the fix is to clear the state, not
+    to silence the check.
+
+    The inventory is read here rather than by `verify()`'s own default, because the
+    warning about sources it could not read is not a finding and `verify()` returns
+    findings only. Splitting it here keeps the six codes meaning six things and
+    leaves "this host could not be fully inspected" as what it is.
+    """
+    inventory = verify_mod.read_host_inventory()
+    findings = verify_mod.verify(inventory)
+
+    _print_verify_report(inventory.unreadable, findings)
+
+    blocking = [finding for finding in findings if finding.code in verify_mod.BLOCKING_CODES]
+    if blocking:
+        typer.echo(f"verdict: {len(blocking)} blocking finding(s) — see the blocking codes above")
+        raise typer.Exit(EXIT_FINDINGS)
+    raise typer.Exit(EXIT_OK)
 
 
 def run_action_job(job: Job, args: list[str]) -> None:

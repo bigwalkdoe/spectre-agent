@@ -1546,4 +1546,9 @@ def main(args: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    main()
+    # `SystemExit(main())`, not a bare `main()`. The installed `spectre` entry point
+    # is wrapped in `sys.exit()` by `console_scripts`, so it always propagated
+    # `main()`'s return value; running the module directly discarded it and every
+    # command exited 0 whatever it reported — including `actions verify`, a CI gate
+    # that could not fail. The two ways of running the same code must agree.
+    raise SystemExit(main())
