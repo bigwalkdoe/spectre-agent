@@ -111,9 +111,22 @@ def resolve(job: Job) -> ResolvedAction:
 
     Raises `DispatchError` naming the path and the reason. Nothing here executes
     anything, and no failure is softened into a skip.
+
+    **Every malformed `action` raises `DispatchError`, not a bare exception.** A NUL
+    in the path makes `Path.resolve` raise `ValueError` from the C layer, which
+    reached the caller as a traceback instead of the documented exit 3 — the one
+    code that means "registered but not dispatchable". A registry value is data, and
+    data that cannot be turned into a path has no more business raising
+    `ValueError` than a missing file does.
     """
     root = actions_root()
-    target = (root / job.action).resolve()
+    try:
+        target = (root / job.action).resolve()
+    except (OSError, ValueError) as e:
+        # `ValueError` here is the embedded-NUL case; `OSError` is a path too long
+        # or a looped symlink. Both are the same fact to a caller: this action's path
+        # is not a path.
+        raise DispatchError(f"job {job.name} has an unusable action path {job.action!r}: {e}") from None
 
     # An absolute `action` replaces the root rather than extending it, so this
     # also refuses `/etc/whatever` and not just `../` traversal.
@@ -121,6 +134,14 @@ def resolve(job: Job) -> ResolvedAction:
         raise DispatchError(f"job {job.name} resolves outside the actions root: {target}")
     if not target.exists():
         raise DispatchError(f"job {job.name} action is missing: {target}")
+    # A *directory* is present and passes `os.access(X_OK)` — every directory on the
+    # host is executable, since that is what the bit means. A directory named
+    # `cleanup.sh` therefore satisfied both checks above and reached `Popen`, which
+    # failed with exit 126 and was recorded as a failed run: the dispatcher said the
+    # action ran, and the run record said it succeeded at nothing. `is_file` is the
+    # check that matches what is going to be executed.
+    if not target.is_file():
+        raise DispatchError(f"job {job.name} action is not a file: {target}")
     if not os.access(target, os.X_OK):
         raise DispatchError(f"job {job.name} action is not executable: {target}")
 

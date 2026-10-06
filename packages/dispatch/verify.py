@@ -55,12 +55,16 @@ no crontab. Neither is honest, so the gap is carried as a warning instead.
 The six codes, and what each one claims:
 
 ``missing``
-    The job's action is not present in the actions root. Also covers an action that
-    resolves *outside* the root (`../escape.sh`, or an absolute path): such a job is
-    not dispatchable, so it cannot be reported as healthy, and the detail says
-    "resolves outside the actions root" rather than calling it absent from disk.
+    The job's action is not present in the actions root, or is not a file. Two
+    further cases land here because each is a job that cannot be dispatched and so
+    cannot be reported as healthy: an action that resolves *outside* the root
+    (`../escape.sh`, or an absolute path), where the detail says "resolves outside
+    the actions root" rather than calling it absent from disk; and a path that is a
+    *directory* named like a script, which passes both `exists()` and the executable
+    bit — on a directory that bit means "may be traversed" — and would otherwise be
+    reported as a syntax error in a file that is not a script.
 ``not-executable``
-    Present, but `os.access(..., os.X_OK)` is false. The mode a `git clone` or a
+    A file, but `os.access(..., os.X_OK)` is false. The mode a `git clone` or a
     `cp` without `-p` leaves behind.
 ``syntax``
     `bash -n` on the action exited non-zero, or could not be run at all. The detail
@@ -404,12 +408,13 @@ def _syntax_problem(path: Path) -> str:
 def _registry_findings() -> list[Finding]:
     """Every registry job against the actions root, plus the duplicates among them.
 
-    The checks run containment, then existence, then mode, then syntax — the same
-    order `resolve` uses, and for the same reason: which fact you report decides
-    which fix the operator reaches for, and "resolves outside the checkout" is a
-    different and more serious problem than "that file is not executable". Each
-    check stops at its own finding for a given job, because "not executable" is a
-    claim about a file, and there is no file to make the claim about.
+    The checks run containment, then existence, then "is a file", then mode, then
+    syntax — the same order `resolve` uses, and for the same reason: which fact you
+    report decides which fix the operator reaches for, and "resolves outside the
+    checkout" is a different and more serious problem than "that file is not
+    executable". Each check stops at its own finding for a given job, because "not
+    executable" is a claim about a file, and there is no file to make the claim
+    about.
     """
     root = actions_root()
     findings: list[Finding] = []
@@ -429,6 +434,14 @@ def _registry_findings() -> list[Finding]:
             )
         elif not target.exists():
             findings.append(Finding(MISSING, f"{job.name}: no action at {target}"))
+        elif not target.is_file():
+            # `exists()` and `os.access(X_OK)` both pass for a directory — the
+            # executable bit on a directory means "may be traversed", not "is a
+            # program" — so a directory named `cleanup.sh` reached `bash -n` and was
+            # reported as `syntax`, exit 126. "this script is broken" is the wrong
+            # claim about something that is not a script, and `resolve` refuses the
+            # same path, so the two have to say the same thing.
+            findings.append(Finding(MISSING, f"{job.name}: action is not a file: {target}"))
         elif not os.access(target, os.X_OK):
             findings.append(Finding(NOT_EXECUTABLE, f"{job.name}: not executable: {target}"))
         else:
