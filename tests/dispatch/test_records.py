@@ -125,8 +125,10 @@ def _pre_migration_db(db: Path) -> Path:
 
 
 def _read(db: Path, columns: str) -> list[tuple[Any, ...]]:
+    # `ORDER BY id` so a comparison of two reads is about the values rather than
+    # about whatever order the table happened to be scanned in.
     with closing(sqlite3.connect(db)) as con:
-        return con.execute(f"SELECT {columns} FROM maintenancerecord").fetchall()
+        return con.execute(f"SELECT {columns} FROM maintenancerecord ORDER BY id").fetchall()
 
 
 def _columns(db: Path) -> set[str]:
@@ -219,15 +221,14 @@ def test_a_second_run_of_the_same_job_is_its_own_record() -> None:
 def test_concurrent_writers_all_land() -> None:
     """Review Focus 5: exporters and a cron job write simultaneously.
 
-    The barrier is what makes this a concurrency test rather than a loop. Without it
-    the four threads would be scheduled one after another, and the assertion would
-    hold just as well against a database that refuses a second writer — which is the
-    property this is here to check.
+    The barrier is what makes this a concurrency test rather than a loop — without
+    it the four threads would be scheduled one after another and would never overlap.
 
-    This pins that no write is lost and none raises. It does not by itself prove WAL:
-    SQLite serialises writer against writer behind the busy timeout whatever the
-    journal mode, so a rollback journal would also pass it. The journal mode is
-    pinned separately, by the read-in-flight test below.
+    It pins that all twenty writes land and none raises. It does not prove WAL, and
+    should not be read as doing so: SQLite serialises writer against writer behind the
+    busy timeout whatever the journal mode, so a rollback journal passes this too —
+    measured, with the pragma removed. The journal mode is pinned separately, by the
+    read-in-flight test below.
     """
     errors: list[BaseException] = []
     barrier = threading.Barrier(_WRITERS)
@@ -440,6 +441,10 @@ def test_a_run_and_its_findings_are_written_in_one_transaction(monkeypatch: pyte
     The two are written in one session so they cannot diverge: a record of a run
     whose findings never landed understates the exposure for exactly as long as
     nothing notices, which is the failure this store exists to prevent.
+
+    Faulted at the mapping step because that is the only place the two halves meet:
+    a payload is built from JSON, so nothing in it can otherwise make the second half
+    of the write fail, and the property would be untestable rather than merely true.
     """
 
     def explode(payload: dict[str, Any] | None) -> list[SecurityIncident]:
