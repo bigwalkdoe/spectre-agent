@@ -43,6 +43,7 @@ import pytest
 from typer.testing import CliRunner
 
 import apps.cli.dispatch_cmds as dispatch_cmds
+from apps.cli.dispatch_cmds import EXIT_FAILED, EXIT_LOCKED, EXIT_NOT_DISPATCHABLE, EXIT_OK, EXIT_UNKNOWN_JOB
 from apps.cli.main import app
 from packages.dispatch import registry
 from packages.dispatch.lock import lock_path
@@ -100,6 +101,28 @@ def _rows(job: str) -> list[int | None]:
     contains.
     """
     return [r.id for r in recent_runs(job=job, limit=20) if r.action == job]
+
+
+def _listing(stdout: str) -> dict[str, dict[str, str]]:
+    """`spectre actions list` output as `{job: {column: cell}}`, keyed by header.
+
+    The column *name* is read out of the header row rather than assumed, so a
+    column that is renamed or reordered turns into a missing key here instead of
+    silently comparing the wrong cell — which is exactly how the previous version of
+    the sudo test came to pass against swapped columns.
+
+    `maxsplit` leaves the schedule hint whole: `0 2 * * 6` is five whitespace-
+    separated words, and splitting it across cells would make every job's schedule
+    look like a mangled one.
+    """
+    lines = [line for line in stdout.splitlines() if line.strip()]
+    headers = lines[0].split()
+    table: dict[str, dict[str, str]] = {}
+    for line in lines[1:]:
+        cells = line.split(maxsplit=len(headers) - 1)
+        row = dict(zip(headers, cells, strict=True))
+        table[row["job"]] = row
+    return table
 
 
 # ── spectre run ──────────────────────────────────────────────────────────────
@@ -467,6 +490,67 @@ def test_run_refuses_a_sudo_job_when_not_root(actions: Path, monkeypatch: pytest
     assert not marker.exists()
 
 
+def test_run_releases_the_lock_after_a_sudo_refusal(actions: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """No lock is left behind for a run that never happened.
+
+    This asserts the property, not the ordering: it is equally satisfied by refusing
+    before the lock is taken (which is what the implementation does) and by taking
+    it and releasing it correctly. What it rules out is a leak — `SUDO_JOB` is
+    `concurrency="forbid", and a lock stuck on this job would block every privileged
+    run of it until stale reclamation, an hour later at the default timeout.
+
+    The ordering itself is pinned by
+    `test_run_refuses_a_sudo_job_before_taking_the_lock`, which can observe the
+    difference; this one cannot.
+    """
+    _write(actions, f"{SUDO_JOB}.sh", "#!/bin/bash\nexit 0\n")
+    monkeypatch.setattr(dispatch_cmds.os, "geteuid", lambda: 1000)
+
+    assert runner.invoke(app, ["run", SUDO_JOB]).exit_code == 3
+    assert not lock_path(registry.get_job(SUDO_JOB)).exists()
+
+
+def test_run_refuses_a_sudo_job_before_taking_the_lock(actions: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A refusal must not be reported as a lock, and must not take one.
+
+    `SUDO_JOB` is `concurrency="forbid"` and its lock is held here by a live process,
+    so the two orderings give different answers: refusing inside the lock answers `4`
+    "already running", which points an unprivileged caller at waiting — and waiting
+    is not what fixes not being root. Refusing first answers `3`, and leaves the real
+    holder's lock untouched.
+    """
+    _write(actions, f"{SUDO_JOB}.sh", "#!/bin/bash\nexit 0\n")
+    monkeypatch.setattr(dispatch_cmds.os, "geteuid", lambda: 1000)
+
+    path = lock_path(registry.get_job(SUDO_JOB))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    started = datetime.now(UTC)
+    held = json.dumps({"pid": os.getpid(), "started_at": started.isoformat()})
+    path.write_text(held, encoding="utf-8")
+
+    result = runner.invoke(app, ["run", SUDO_JOB])
+
+    assert result.exit_code == 3
+    assert "needs root" in result.stdout
+    assert "already running" not in result.stdout
+    assert path.read_text(encoding="utf-8") == held
+
+
+def test_the_exit_code_constants_are_the_documented_ones() -> None:
+    """The table in the module docstring, pinned against the constants.
+
+    Every other code is asserted through a real dispatch, which only shows that *a*
+    code came out; this is what stops the six being renumbered while the tests still
+    pass — a `0` that became `1` would otherwise be indistinguishable from `main.py`'s
+    catch-all.
+    """
+    assert EXIT_OK == 0
+    assert EXIT_UNKNOWN_JOB == 2
+    assert EXIT_NOT_DISPATCHABLE == 3
+    assert EXIT_LOCKED == 4
+    assert EXIT_FAILED == 5
+
+
 def test_run_refuses_a_sudo_job_without_recording_a_run(actions: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The refusal records nothing: a record of a privileged job that never
     executed would be a lie the run history could not correct later."""
@@ -476,17 +560,6 @@ def test_run_refuses_a_sudo_job_without_recording_a_run(actions: Path, monkeypat
     before = _rows(SUDO_JOB)
     assert runner.invoke(app, ["run", SUDO_JOB]).exit_code == 3
     assert _rows(SUDO_JOB) == before
-
-
-def test_run_releases_the_lock_after_a_sudo_refusal(actions: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """`SUDO_JOB` is concurrency=forbid, and the refusal happens while the lock is
-    held — so a lock leaked here would block this privileged job for twice its
-    timeout because someone forgot a password."""
-    _write(actions, f"{SUDO_JOB}.sh", "#!/bin/bash\nexit 0\n")
-    monkeypatch.setattr(dispatch_cmds.os, "geteuid", lambda: 1000)
-
-    assert runner.invoke(app, ["run", SUDO_JOB]).exit_code == 3
-    assert not lock_path(registry.get_job(SUDO_JOB)).exists()
 
 
 def test_run_runs_a_sudo_job_when_already_root(actions: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -535,14 +608,63 @@ def test_actions_list_shows_sudo_mutates_timeout_and_schedule() -> None:
 
 
 def test_actions_list_reports_a_sudo_jobs_metadata() -> None:
-    """21 of the 61 jobs need root. A listing that hid that would send an
-    operator into a failure they could have read off the list instead."""
+    """21 of the 61 jobs need root. A listing that hid that — or that put the
+    wrong value under the `sudo` heading — would send an operator into a failure
+    they could have read off the list instead.
+
+    Positional, which the previous version of this test was not: it asserted
+    `"true" in sudo_row.split()[1:]`, membership anywhere in the row. Both
+    `security/run-security-hardening` and `backups/backup-all` are `mutates=true`,
+    so swapping the `sudo` and `mutates` columns left both assertions green — 44 of
+    44 tests passed against a listing that told every non-privileged mutating job
+    it needed root. Index 1 is the `sudo` column, and it is read as such.
+    """
     result = runner.invoke(app, ["actions", "list"])
-    rows = {line.split()[0]: line for line in result.stdout.splitlines() if line.strip()}
-    sudo_row = rows[SUDO_JOB]
-    assert "true" in sudo_row.split()[1:]  # sudo
-    plain = rows[JOB]
-    assert "false" in plain.split()[1:]  # sudo=false, so this job needs no root
+    table = _listing(result.stdout)
+    assert table[SUDO_JOB]["sudo"] == "true"
+    assert table[JOB]["sudo"] == "false"
+
+
+def test_actions_list_reports_every_job_metadata_positionally() -> None:
+    """All four metadata columns, for every job, against the registry.
+
+    Wider than the sudo test on purpose: the same membership weakness applied to
+    `mutates`, `timeout` and `schedule`, so this asserts each column for all 61
+    jobs rather than one job by hand. Expectations come from the registry, keyed by
+    the column *name* read out of the header row, so a column that is renamed or
+    reordered fails here instead of comparing the wrong cell.
+    """
+    result = runner.invoke(app, ["actions", "list"])
+    table = _listing(result.stdout)
+
+    assert set(table) == {job.name for job in registry.JOBS}
+    for job in registry.JOBS:
+        row = table[job.name]
+        assert row["sudo"] == str(job.sudo).lower(), job.name
+        assert row["mutates"] == str(job.mutates).lower(), job.name
+        assert row["timeout"] == str(job.timeout), job.name
+        assert row["schedule"] == (job.schedule_hint or "manual"), job.name
+
+
+def test_actions_list_column_order_is_the_documented_one() -> None:
+    """The contract the two tests above rest on: column 1 is `sudo`, column 2 is
+    `mutates`, and so on. Pinned here because a reordering would otherwise be
+    caught only as a confusing value mismatch rather than as an order change."""
+    result = runner.invoke(app, ["actions", "list"])
+    header = next(line for line in result.stdout.splitlines() if line.strip())
+    assert header.split() == ["job", "sudo", "mutates", "timeout", "schedule"]
+
+
+def test_actions_list_shows_exactly_the_privileged_jobs_as_privileged() -> None:
+    """Both directions, over the whole registry: exactly the `sudo=true` jobs read
+    `true`, and the rest read `false`. A one-directional check would pass if the
+    column were `true` for everything."""
+    result = runner.invoke(app, ["actions", "list"])
+    table = _listing(result.stdout)
+    privileged = {job.name for job in registry.JOBS if job.sudo}
+
+    assert privileged, "the registry no longer has any privileged job to check"
+    assert {name for name, row in table.items() if row["sudo"] == "true"} == privileged
 
 
 def test_actions_list_reports_the_schedule_hint() -> None:

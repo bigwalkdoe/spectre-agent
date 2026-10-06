@@ -18,12 +18,24 @@ see, and there is only one thing to get right here, so it is worth stating plain
  ``4``  another run holds this job's lock
  ``5``  the action ran and failed, or was stopped for exceeding
         its timeout
+ ``1``  an unexpected exception — see below
 ======  ==========================================================
 
 Cron reads those numbers and nothing else, so each refusal prints the one fact the
 operator needs to act: the path that is missing, the pid holding the lock and since
 when, the command to run instead. `3` and `4` describe the invocation and `5`
 describes the run, which is why a refusal is never reported as a failed run.
+
+``1`` is in the table because the table would otherwise read as exhaustive and it is
+not. It is `main.py`'s pre-existing catch-all, not a code chosen here: a run whose
+action succeeded and whose `save_run` then failed — the store locked, the disk full,
+a schema this binary does not understand — leaves no record and exits `1` rather than
+`5`, because `5` means the *action* failed and would be the more expensive lie. Cron
+sees non-zero either way, so the run is still reported as not clean; what is lost is
+that it is indistinguishable from a run that never started. It is named here so the
+next reader knows it is a known gap in the contract rather than an oversight, and it
+is not worth fixing here: a store that cannot record a run that happened is a
+storage problem, and pretending otherwise from the dispatcher would be its own lie.
 
 **`spectre run` dispatches one job, and says so when it is asked for something else.**
 The design spec lists `spectre run security --audit` as running a group, and leaves
@@ -171,10 +183,19 @@ def _job_lookup(name: str) -> Job:
 def _refuse_unprivileged(job: Job) -> None:
     """Exit `3` with the command to run instead, unless this process is root.
 
-    Called while the lock is held, so a refusal cannot leave the lock behind — see
-    `run_action_job`. Nothing is executed on this path, and nothing is recorded: a
-    record of a privileged job that never ran would be a lie the run history cannot
-    later correct.
+    Called *before* the lock is taken, and that ordering is the point rather than an
+    accident. Taking a `concurrency="forbid"` lock in order to refuse leaves a window
+    in which a SIGKILL between the claim and the refusal leaks that lock until stale
+    reclamation — up to twice the job's timeout, an hour at the defaults — so one
+    unprivileged attempt would lock out every later privileged one. A lock taken for
+    work that is never going to happen is a lock nobody asked for.
+
+    It also makes the answer correct rather than merely fast. A caller who is not
+    root and meets a busy privileged job otherwise gets exit 4, "lock held", which
+    points at the wrong problem: waiting is not what fixes not being root.
+
+    Nothing is executed on this path and nothing is recorded — a record of a
+    privileged job that never ran would be a lie the run history cannot later correct.
     """
     if not job.sudo or os.geteuid() == 0:
         return
@@ -264,19 +285,22 @@ def actions_show(job: str) -> None:
 def run_action_job(job: Job, args: list[str]) -> None:
     """Dispatch `job`, record the run, and raise the exit code cron reads.
 
-    The order is the order of the things that can go wrong: the name is resolved
-    before anything touches the filesystem, the action is resolved before the lock
-    is taken (a job that cannot run should not lock itself out of a job that can),
-    and the privilege requirement is checked inside the lock and before the action
-    is executed, so a refusal releases the lock it took on its way out.
+    The order is the order of the things that can go wrong, cheapest and least
+    consequential first: the privilege requirement is checked before the lock is
+    taken, the action is resolved before it too, and the lock is held only for the
+    run itself. Both checks that precede the lock are refusals — "you are not root",
+    "this action is not dispatchable" — and neither is fixed by waiting, so neither
+    should cost a contended lock, let alone leave one behind if this process is
+    killed in between.
 
     The lock is a `with` rather than an acquire/release pair, deliberately. Every
-    exit from here — a refusal, a resolver error, a failed run, an exception from
-    the store — has to release it, and a pair of calls written out by hand is a place
-    where one exit path eventually forgets. `backups/backup-all` failing while
-    holding a `concurrency="forbid"` lock would block the next backup for twice the
-    timeout, which is the one failure mode the lock cannot be allowed to have.
+    exit from inside it — a failed run, an exception from the store — has to release
+    it, and a pair of calls written out by hand is a place where one exit path
+    eventually forgets. `backups/backup-all` failing while holding a
+    `concurrency="forbid"` lock would block the next backup for twice the timeout,
+    which is the one failure mode the lock cannot be allowed to have.
     """
+    _refuse_unprivileged(job)
     try:
         resolved = resolve(job)
     except DispatchError as e:
@@ -285,7 +309,6 @@ def run_action_job(job: Job, args: list[str]) -> None:
 
     try:
         with JobLock(job):
-            _refuse_unprivileged(job)
             outcome = run_action(resolved, args, TRIGGER, timeout=job.timeout)
     except LockUnavailable as e:
         # The exception already carries the holder's pid and start time, and both
@@ -320,6 +343,10 @@ def run_action_job(job: Job, args: list[str]) -> None:
     typer.echo(f"{envelope.job}: {envelope.status.value} in {envelope.duration_ms}ms ({ended})")
     if envelope.status is not Status.SUCCESS:
         raise typer.Exit(EXIT_FAILED)
+    # Explicit rather than falling off the end: every other code in the table is a
+    # visible `raise`, and a success that is only implied is the one a reader has to
+    # go looking for.
+    raise typer.Exit(EXIT_OK)
 
 
 def register(app: typer.Typer) -> None:
@@ -344,7 +371,8 @@ def register(app: typer.Typer) -> None:
         """Run one registered job and record the run.
 
         Exit 0 success, 2 unknown job, 3 not dispatchable (including a job that
-        needs root and did not get it), 4 lock held, 5 failed or timed out.
+        needs root and did not get it), 4 lock held, 5 failed or timed out, 1 for an
+        unexpected error such as a run record that could not be written.
         """
         run_action_job(_job_lookup(job), list(args or []))
 
