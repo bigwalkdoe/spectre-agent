@@ -45,9 +45,17 @@ from packages.memory.db import (
     save_run,
 )
 
-# The six columns the dispatch layer adds, written out here rather than imported
+# The seven columns the dispatch layer adds, written out here rather than imported
 # from the module so the test states the contract instead of restating the code.
-_ADDED = {"trigger", "exit_code", "resolved_path", "git_commit", "git_dirty", "payload"}
+_ADDED = {
+    "trigger",
+    "exit_code",
+    "resolved_path",
+    "git_commit",
+    "git_dirty",
+    "payload",
+    "stderr_tail",
+}
 
 # The columns that existed before the migration, and the only ones a preservation
 # check may read back: the point is that nothing here changed.
@@ -164,6 +172,22 @@ def test_a_run_that_never_reached_an_exit_code_records_none() -> None:
     assert row.status == "refused"
     assert row.exit_code is None
     assert row.trigger == "api"
+
+
+def test_save_run_round_trips_the_stderr_tail() -> None:
+    """A failure's diagnostic is on stderr, so the record has to keep it.
+
+    `log_output` is stdout and other code already reads it, so the stderr tail gets
+    its own column rather than being appended to that one. Keeping only one of the
+    two streams is the failure this is here to catch: the record still looks
+    complete, so the missing half is invisible until it is the half being needed.
+    """
+    rid = save_run(_env(status=Status.FAILED, exit_code=1))
+    row = next(r for r in recent_runs(limit=10) if r.id == rid)
+    assert row.status == "failed"
+    assert row.stderr_tail == "err"
+    # stdout still lands in its own column, untouched.
+    assert row.log_output == "out"
 
 
 def test_a_run_with_no_payload_stores_none() -> None:
@@ -297,11 +321,12 @@ def test_ensure_schema_adds_columns_to_a_pre_migration_table(tmp_path: Path) -> 
     con.close()
 
     added = ensure_schema(db_path=db)
-    assert "trigger" in added and "git_commit" in added
+    assert {"trigger", "git_commit", "stderr_tail"} <= set(added)
 
     con = sqlite3.connect(db)
     cols = {r[1] for r in con.execute("PRAGMA table_info(maintenancerecord)")}
     assert _ADDED <= cols
+    assert "stderr_tail" in cols
     assert con.execute("SELECT count(*) FROM maintenancerecord").fetchone()[0] == 1
     con.close()
 
@@ -312,13 +337,41 @@ def test_ensure_schema_is_idempotent(tmp_path: Path) -> None:
     Against an empty database the very first call already returns nothing, because
     `create_all` owns the table, so the assertion would hold whether or not the
     function did anything at all. So this starts from the pre-migration table, where
-    the first call has six columns of real work to do and the second has none.
+    the first call has seven columns of real work to do and the second has none.
     """
     db = _pre_migration_db(tmp_path / "legacy.db")
-    assert set(ensure_schema(db_path=db)) == _ADDED
+    added = ensure_schema(db_path=db)
+    assert set(added) == _ADDED
+    # The count as well as the names, so dropping one from the migration is a failure
+    # here rather than a column the host turns out not to have.
+    assert len(added) == 7, sorted(added)
+    assert "stderr_tail" in added
     assert ensure_schema(db_path=db) == []
     assert ensure_schema(db_path=db) == []
     assert _ADDED <= _columns(db)
+
+
+def test_ensure_schema_adds_only_what_a_partly_migrated_table_is_missing(tmp_path: Path) -> None:
+    """A host already carrying the earlier columns gets just the new one, safely.
+
+    This is not a hypothetical state: a database migrated by an earlier build is
+    already in it, and so is any host that took the previous six-column migration.
+    So the migration has to be incremental rather than all-or-nothing, and its second
+    pass over a populated table has to be as non-destructive as its first.
+    """
+    db = _pre_migration_db(tmp_path / "partial.db")
+    assert set(ensure_schema(db_path=db)) == _ADDED
+
+    # Back to "migrated except for the newest column", which is what the table looks
+    # like on a host that has not seen this change yet.
+    with closing(sqlite3.connect(db)) as con:
+        con.execute("ALTER TABLE maintenancerecord DROP COLUMN stderr_tail")
+        con.commit()
+
+    before = _read(db, _LEGACY_COLUMNS)
+    assert ensure_schema(db_path=db) == ["stderr_tail"]
+    assert _read(db, _LEGACY_COLUMNS) == before
+    assert _read(db, "stderr_tail") == [(None,)] * _LEGACY_ROWS
 
 
 def test_ensure_schema_preserves_existing_rows_and_their_values(tmp_path: Path) -> None:
@@ -338,10 +391,11 @@ def test_ensure_schema_preserves_existing_rows_and_their_values(tmp_path: Path) 
 
     assert _read(db, _LEGACY_COLUMNS) == before
     # Every row reading back as one tuple means every row took the default its own
-    # `ALTER` declared: '' for the strings, 0 for the flag, NULL for the two
-    # nullable ones.
-    with_defaults = _read(db, "trigger, exit_code, resolved_path, git_commit, git_dirty, payload")
-    assert with_defaults == [("", None, "", "", 0, None)] * _LEGACY_ROWS
+    # `ALTER` declared: '' for the strings, 0 for the flag, NULL for the three
+    # nullable ones — including stderr_tail, which a run from before the column
+    # existed cannot have had any of.
+    with_defaults = _read(db, "trigger, exit_code, resolved_path, git_commit, git_dirty, payload, stderr_tail")
+    assert with_defaults == [("", None, "", "", 0, None, None)] * _LEGACY_ROWS
 
 
 def test_ensure_schema_ignores_a_database_with_no_table(tmp_path: Path) -> None:

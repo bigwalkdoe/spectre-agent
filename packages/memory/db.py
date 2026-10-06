@@ -88,6 +88,11 @@ class MaintenanceRecord(SQLModel, table=True):
     git_dirty: bool = False
     # The envelope's structured payload as JSON, when the action emitted one.
     payload: str | None = None
+    # The action's stderr tail, which is the half a failure usually states itself in.
+    # Its own column rather than appended to `log_output`, so a record can carry both
+    # streams and the code already reading stdout out of `log_output` is undisturbed.
+    # Ordered to match `_DISPATCH_COLUMNS`, which is append-only.
+    stderr_tail: str | None = None
 
 
 class SecurityIncident(SQLModel, table=True):
@@ -184,8 +189,13 @@ class EventLog(SQLModel, table=True):
 # model because SQLite cannot add a NOT NULL column to a populated table without
 # being told a default, and this is the only place that can name it: a column added
 # to the model without a line here fails at query time on any host that already has
-# the table. `exit_code` and `payload` are nullable, so the rows already on a host
-# satisfy them as NULL — an exit code a run never earned, and no payload at all.
+# the table. `exit_code`, `payload` and `stderr_tail` are nullable, so the rows
+# already on a host satisfy them as NULL — an exit code a run never earned, no
+# payload at all, and no stderr from an action that predates the column.
+#
+# Appended to, never reordered: a host that has already migrated the earlier columns
+# picks up only what is still missing, which is what makes adding one safe after the
+# fact rather than a rewrite of the list.
 _DISPATCH_COLUMNS: tuple[tuple[str, str], ...] = (
     ("trigger", "TEXT NOT NULL DEFAULT ''"),
     ("exit_code", "INTEGER"),
@@ -193,6 +203,7 @@ _DISPATCH_COLUMNS: tuple[tuple[str, str], ...] = (
     ("git_commit", "TEXT NOT NULL DEFAULT ''"),
     ("git_dirty", "INTEGER NOT NULL DEFAULT 0"),
     ("payload", "TEXT"),
+    ("stderr_tail", "TEXT"),
 )
 
 
@@ -203,7 +214,7 @@ def ensure_schema(db_path: Path | None = None) -> list[str]:
     missing and leaves existing ones exactly as they are, with no `ALTER` step, and
     this project has no Alembic. So on a host that already has the seven-column
     table — and the live `~/.config/spectre/memory.db` is 28 MB with 140,385 rows in
-    it — declaring the six new fields on the model is not enough: the model and the
+    it — declaring the seven new fields on the model is not enough: the model and the
     table then disagree, and every query against that database raises
     `OperationalError: no such column: maintenancerecord.trigger` with nothing to
     say why. This issues the `ALTER TABLE`s the ORM will not.
@@ -219,7 +230,7 @@ def ensure_schema(db_path: Path | None = None) -> list[str]:
     Idempotent, and safe on every `init_db()`: it reads the columns that exist and
     adds only what is missing. A database with no `maintenancerecord` yet returns
     nothing, because `create_all` is about to make that table with every column
-    already in it, and reporting six names there would announce a migration that did
+    already in it, and reporting seven names there would announce a migration that did
     not happen.
 
     Returns the column names this call added, which is empty once the schema is
@@ -315,10 +326,11 @@ def save_run(envelope: Envelope, agent: str = "dispatch") -> int:
     could not be written cannot be left behind claiming it had none: either the run
     and its findings are both stored, or neither is.
 
-    `log_output` keeps the stdout tail, and `MaintenanceRecord` has no second column
-    for the stderr tail — which is the half a failure usually states itself in. Worth
-    knowing about: a failed action's error text reaches the envelope and not the
-    store, until a column exists for it.
+    `log_output` keeps the stdout tail, and the stderr tail goes to its own column
+    rather than being appended to that one: stdout is what other code already reads
+    out of `log_output`, and a failed action's diagnostic is usually on stderr. A
+    record that kept one stream and dropped the other would still look complete, which
+    is exactly how that loss goes unnoticed until someone needs the missing half.
 
     Returns the new row's id.
     """
@@ -334,6 +346,7 @@ def save_run(envelope: Envelope, agent: str = "dispatch") -> int:
         resolved_path=envelope.resolved_path,
         git_commit=envelope.git_commit,
         git_dirty=envelope.git_dirty,
+        stderr_tail=envelope.stderr_tail,
         payload=None if envelope.payload is None else json.dumps(envelope.payload),
     )
     with Session(engine) as session:
