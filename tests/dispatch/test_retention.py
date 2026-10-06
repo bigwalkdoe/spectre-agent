@@ -317,14 +317,18 @@ def test_prune_refuses_to_create_a_store_that_is_not_there(tmp_path: Path, monke
     `prune` against a fresh host would leave an empty database behind and report that
     nothing was old, which is a fabrication on both counts. The file check happens
     before any connection is opened, which is the only order in which "asking" is free.
+
+    What makes this an assertion rather than a no-op is the exception *type*: a
+    connecting implementation raises `OperationalError` here, not
+    `FileNotFoundError`. Nothing else in the test can fail — the target directory does
+    not exist, and SQLite cannot create a file inside a directory that does not exist,
+    so asserting the directory is still absent would pass either way. That case is
+    pinned where it can fail: with the directory present, in the `actions list` test.
     """
-    target = tmp_path / "cfg" / "memory.db"
-    monkeypatch.setattr(retention, "engine", create_engine(f"sqlite:///{target}"))
+    monkeypatch.setattr(retention, "engine", create_engine(f"sqlite:///{tmp_path / 'cfg' / 'memory.db'}"))
 
     with pytest.raises(FileNotFoundError, match="no run store"):
         prune(NOW)
-    assert not target.exists()
-    assert not (tmp_path / "cfg").exists(), "connecting is what creates a SQLite file"
 
 
 def test_record_growth_refuses_to_create_a_store_that_is_not_there(
@@ -337,12 +341,12 @@ def test_record_growth_refuses_to_create_a_store_that_is_not_there(
     reading is a regression, and it is one that also fails outright wherever the config
     directory cannot be created at all.
     """
-    target = tmp_path / "cfg" / "memory.db"
-    monkeypatch.setattr(retention, "engine", create_engine(f"sqlite:///{target}"))
+    monkeypatch.setattr(retention, "engine", create_engine(f"sqlite:///{tmp_path / 'cfg' / 'memory.db'}"))
 
+    # The exception type is the whole assertion; see the prune test above for why there
+    # is nothing else here to check.
     with pytest.raises(FileNotFoundError, match="no run store"):
         record_growth()
-    assert not (tmp_path / "cfg").exists()
 
 
 # ── rows_past_cutoff ──────────────────────────────────────────────────────────
@@ -371,11 +375,9 @@ def test_rows_past_cutoff_reports_the_sweep_without_deleting(engine: Engine) -> 
 
 
 def test_rows_past_cutoff_does_not_create_a_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    target = tmp_path / "cfg" / "memory.db"
-    monkeypatch.setattr(retention, "engine", create_engine(f"sqlite:///{target}"))
+    monkeypatch.setattr(retention, "engine", create_engine(f"sqlite:///{tmp_path / 'cfg' / 'memory.db'}"))
     with pytest.raises(FileNotFoundError, match="no run store"):
         rows_past_cutoff(NOW)
-    assert not (tmp_path / "cfg").exists()
 
 
 def test_the_measurement_holds_the_store_read_only(engine: Engine) -> None:

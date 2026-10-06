@@ -5,20 +5,23 @@ caller later. What it does is make the rule stateable: which rows are past due, 
 are not, and what each of those decisions cost.
 
 **The tiering is about frequency, not importance — and against this host's data it
-currently buys nothing.** Measured on the live table, at 203 bytes a row: the two
-legacy collectors peaked at ~1,310 rows each per day, one every 66 seconds, between
-2026-08-12 and 2026-09-01, and the other twenty actions together arrive at about 8 rows
-a day. *Were* those collectors registry jobs, the 90-day tier would hold them near
-236,000 rows / 48 MB where the 365-day tier would let them reach 956,000 rows / 194 MB —
-so the tiering is worth roughly four times on that one pair of jobs, and on nothing else.
+currently buys nothing.** Measured on the live table (decimal MB throughout; 202.8 bytes
+a row, so its 140,385 rows are 28.5 MB): the two legacy collectors ran at 1,886 rows a
+day between them — 943 each — over the 71.2 days from 2026-07-20 to 2026-09-30, peaking
+at about 2,620 a day between 2026-08-12 and 2026-09-01, 1,310 from each action, one every
+66 seconds per action. *Were* those collectors registry jobs, the 90-day tier would hold
+them near 236,000 rows / 48 MB where the 365-day tier would let them reach 956,000 rows /
+194 MB — so the tiering is worth roughly four times on that one pair of jobs, and on
+nothing else. The other twenty actions run at 24 rows a day (seven-day window), which is
+8,760 rows / 1.8 MB at a year.
 
 **None of that applies to the table as it stands.** Every live row is `"unknown"` (below),
 so no row sits on a 90-day cutoff and the shorter tier bounds **nothing** here. And the
-collectors have written 11 rows since 2026-09-10, so the 28 MB is a seven-week burst that
-has already stopped rather than a table that is growing: retention is a guard against
-that rate returning, not against current growth. Both numbers are worth having before
-those collectors become jobs, because that is the moment the shorter tier starts to
-apply — and the moment the first sweep gets big.
+collectors have written 9 rows in the last seven days, so the 28.5 MB is a seven-week
+burst that has already stopped rather than a table that is growing: retention is a guard
+against that rate returning, not against current growth. Both numbers are worth having
+before those collectors become jobs, because that is the moment the shorter tier starts
+to apply — and the moment the first sweep gets big.
 
 **`HIGH_FREQUENCY_JOBS` is a policy list, not a measurement of the registry.** As of
 this writing no registered job declares a `schedule_hint` more frequent than
@@ -43,15 +46,20 @@ written against, the live database holds 140,385 run records under 22 distinct `
 values and *not one of them is a registered job name*: the registry says `group/name`,
 and those rows were written by the legacy agent with bare names. 134,256 of them — 95.6%
 — are the two collectors. So every live row falls into this bucket, the 90-day tier
-reaches none of them, and the rule as specified cannot delete a single row on this host
-for another year: the oldest row is 78 days old, so nothing is anywhere near a cutoff.
+reaches none of them, and the rule as specified cannot delete a row here before
+2027-07-20, when the oldest one — 78 days old — reaches the 365-day cutoff. Nothing is
+anywhere near a cutoff today.
 
 The bucket exists so those rows are still bounded rather than immortal. A rule that only
 ever named registered jobs would leave a removed job's history behind forever, and
-nothing about the collectors' having gone quiet is a promise they will stay quiet — a
-scheduler coming back at the observed 2,620 rows a day would put this table past a
-gigabyte inside the next year. Deciding what happens to those rows — migrate them, name
-them, or delete them — belongs to the plan that replaces the legacy agent, not here.
+nothing about the collectors' having gone quiet is a promise they will stay quiet. If
+their scheduler comes back at the rate they actually ran at, this bucket holds the table
+near 140 MB after a year at their 1,886 rows a day, or 194 MB at their observed 2,620
+peak — and a gigabyte is five years away at that peak, not one. That ceiling is the
+bucket's doing: without it the table would grow without limit, and with it the first
+sweep is a sweep of everything rather than of the last few days. Deciding what happens
+to those rows — migrate them, name them, or delete them — belongs to the plan that
+replaces the legacy agent, not here.
 """
 
 from __future__ import annotations
@@ -128,7 +136,7 @@ def prune(now: datetime | None = None) -> dict[str, int]:
     A single commit for the whole pass, so a prune that fails partway leaves the table
     as it was rather than deleting some of what it was going to delete. Both columns
     are indexed, so each statement is an index range scan. What that buys costs the
-    write lock for the length of the pass, and on this host's 28 MB table that was
+    write lock for the length of the pass, and on this host's 28.5 MB table that was
     measured at about 1.0 s to enumerate its 22 actions and delete nothing and about
     1.1 s to delete all 140,385 rows — so the lock is held for seconds, not minutes,
     but whether a first sweep that size should go in one transaction is the caller's
@@ -167,7 +175,7 @@ def rows_past_cutoff(now: datetime | None = None) -> dict[str, int]:
     **It opens the store read-only**, so the measurement cannot write a row and cannot
     take the write lock. What that does *not* stop is SQLite creating a `-wal` and a
     `-shm` beside a WAL-mode database — shared memory belongs to the directory, not to
-    the file's open mode. Measured on a copy of this host's table: the 28 MB file was
+    the file's open mode. Measured on a copy of this host's table: the 28.5 MB file was
     byte-identical before and after (same sha256), and the two side files appeared with
     0 and 32 KiB in them. The guarantee a caller actually needs is the first one, and it
     is the one the tests pin. An in-memory engine has no file to open read-only and
