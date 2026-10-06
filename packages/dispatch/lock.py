@@ -64,6 +64,17 @@ from packages.dispatch.registry import Job
 # would have released it.
 _STALE_TIMEOUTS = 2
 
+# The shortest staleness window any job may be judged by, in seconds. `registry.py`
+# validates `timeout` as an int and not as a positive one, and this module must not
+# lean on registry having validated its input: at `timeout = 0` the window would be
+# zero seconds, every lock would read as abandoned, and the lock would exclude
+# nothing at all — a silent fail-open, the opposite of what this module is for. So a
+# job whose timeout is unusable is judged by this floor instead, which keeps
+# exclusion working and keeps reclaiming its lock slow. That is cheap here because a
+# `timeout` of zero is not a run that lasts: `run_action` enforces it as a deadline
+# and stops the action on it immediately.
+_MIN_TIMEOUT_SECONDS = 60
+
 # A lock file is created 0o600: it is per-user state, and no other account needs
 # to read it. The mode is still masked by the umask, which can only narrow this.
 _LOCK_MODE = 0o600
@@ -167,11 +178,20 @@ def _alive(pid: int) -> bool:
 
     `PermissionError` means yes: the process exists and belongs to another user,
     which for an action running under sudo is the ordinary answer, and the opposite
-    reading would reclaim a live lock. A pid that is not positive names no process
-    this can verify — `kill` reads 0 and a negative pid as "my process group" and
-    "every process I may signal" — and the only such pid reported anywhere is the
-    `_UNKNOWN_PID` of an unreadable file, which is refused on its age before any
-    liveness question about it arises.
+    reading would reclaim a live lock.
+
+    `OverflowError` means no. `os.kill` raises it rather than `ProcessLookupError`
+    for any pid above 2**31, so it has to be caught here or it escapes as a traceback
+    instead of a refusal — and, worse, escapes before the age rule is ever consulted,
+    which leaves that lock file unreclaimable by anyone and blocks the job until it is
+    deleted by hand. No Linux pid reaches 2**31, so such a value names no real
+    process: reading it as dead sends it down the ordinary abandoned-lock path, the
+    one an unreadable file takes as well.
+
+    A pid that is not positive names no process this can verify either — `kill` reads
+    0 and a negative pid as "my process group" and "every process I may signal" — and
+    the only such pid reported anywhere is the `_UNKNOWN_PID` of an unreadable file,
+    which is refused on its age before any liveness question about it arises.
     """
     if pid <= 0:
         return False
@@ -181,6 +201,8 @@ def _alive(pid: int) -> bool:
         return False
     except PermissionError:
         return True
+    except OverflowError:
+        return False
     return True
 
 
@@ -202,6 +224,13 @@ class JobLock:
         # distinct from the file's contents: a second `JobLock` for a job this
         # process already holds is not the holder and must not release it.
         self._held = False
+        # Where the lock was claimed, remembered rather than recomputed: `lock_path`
+        # reads `SPECTRE_CONFIG_DIR` at call time, so a config directory that differed
+        # between the claim and the release would leave `release` reading a lock file
+        # this process never wrote, failing to match its own pid, and leaking the real
+        # one until the age rule noticed. Only set by a successful claim, which keeps
+        # an allow-concurrency job from resolving a path it will never use.
+        self._path: Path | None = None
 
     def __enter__(self) -> JobLock:
         self.acquire()
@@ -240,6 +269,7 @@ class JobLock:
             except FileExistsError:
                 raise self._refused(read_lock(path), path) from None
 
+        self._path = path
         self._held = True
 
     def release(self) -> None:
@@ -257,7 +287,10 @@ class JobLock:
             return
         self._held = False
 
-        path = lock_path(self._job)
+        # The path recorded at the claim, never recomputed: see `_path`.
+        path = self._path
+        if path is None:
+            return
         holder = read_lock(path)
         if holder is not None and holder[0] == os.getpid():
             path.unlink(missing_ok=True)
@@ -299,8 +332,14 @@ class JobLock:
         return not _alive(pid) or self._too_old(started_at)
 
     def _too_old(self, started_at: datetime) -> bool:
-        """Whether a lock taken at `started_at` is older than this job may ever run."""
-        return datetime.now(UTC) - started_at > timedelta(seconds=self._job.timeout * _STALE_TIMEOUTS)
+        """Whether a lock taken at `started_at` is older than this job may ever run.
+
+        Bounded below by `_MIN_TIMEOUT_SECONDS`, so a job whose registry entry carries
+        a non-positive timeout still excludes concurrent runs instead of treating every
+        lock it holds as abandoned the instant it is written.
+        """
+        window = timedelta(seconds=max(self._job.timeout, _MIN_TIMEOUT_SECONDS) * _STALE_TIMEOUTS)
+        return datetime.now(UTC) - started_at > window
 
     def _refused(self, holder: tuple[int, datetime] | None, path: Path) -> LockUnavailable:
         """The refusal to raise: naming the holder where the file names one, and the
