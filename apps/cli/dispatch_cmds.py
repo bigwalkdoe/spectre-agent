@@ -25,6 +25,15 @@ operator needs to act: the path that is missing, the pid holding the lock and si
 when, the command to run instead. `3` and `4` describe the invocation and `5`
 describes the run, which is why a refusal is never reported as a failed run.
 
+**`spectre run` dispatches one job, and says so when it is asked for something else.**
+The design spec lists `spectre run security --audit` as running a group, and leaves
+open whether groups need ordering or dependency semantics. That is undecided, and the
+registry makes guessing unsafe — 8 of the 16 group names are also job names, and 45 of
+the 61 jobs are `mutates=true` — so group running is deferred to a later plan along
+with the naming question. What is *not* deferred is the answer: a group name is
+reported as a group, and a name that is both a job and a group says which one ran.
+See `_explain_missing_job` and `_note_group_collision`.
+
 Two decisions here are deliberate enough to be worth their own note.
 
 **`sudo` refuses rather than half-attempts.** 21 of the 61 registry jobs need root —
@@ -95,21 +104,68 @@ def _bool(value: bool) -> str:
     return str(value).lower()
 
 
+def _explain_missing_job(name: str) -> None:
+    """Why there is no job by that name, which is not always a typo.
+
+    A name that is a *group* is a real thing in the registry that `spectre run`
+    cannot dispatch, and calling it "unknown" is a lie about the CLI's own surface:
+    an operator who read the design spec — where `spectre run security --audit` runs
+    a group — would conclude their installation is broken rather than that the
+    feature is not built. So the group case is named as a group, with its size, and
+    said plainly to be unimplemented.
+
+    Running a group is deferred rather than declined on the merits. The design
+    spec's own open question ("whether groups need ordering or dependency semantics
+    is undecided") is unresolved, and the registry makes guessing unsafe: 8 of the 16
+    group names are also job names, so `spectre run <name>` is already ambiguous for
+    half the groups, and 45 of the 61 jobs are `mutates=true`, which is a large blast
+    radius to settle by accident.
+    """
+    typer.echo(f"unknown job: {name}")
+    if name in registry.groups():
+        members = registry.jobs_in_group(name)
+        typer.echo(f"'{name}' is a group of {len(members)} jobs, not a job.")
+        typer.echo("Running a whole group is not implemented: spectre run takes one job at a time.")
+    typer.echo("run `spectre actions list` to see every registered job")
+
+
+def _note_group_collision(name: str) -> None:
+    """Say so when a name is both a job and a group, and that the job is what runs.
+
+    8 of the 16 group names are also registered job names, so for those
+    `spectre run <name>` is genuinely ambiguous and the job is the safer, more
+    specific reading. Keeping the job silently would be the worst of the available
+    answers: an operator who meant the group would get one job's output and no hint
+    that a group of the same name existed, and 45 of the 61 jobs mutate, so they would
+    have run one of them without knowing which reading they were seeing.
+    """
+    if name not in registry.groups():
+        return
+    typer.echo(f"note: '{name}' is both a registered job and a group name; running the job.")
+    typer.echo("      Running the group is not implemented — see `spectre actions list`.")
+
+
 def _job_lookup(name: str) -> Job:
-    """The registered job, or exit `2` naming it.
+    """The registered job, or exit `2` naming it and what it actually is.
 
     `get_job` raises `KeyError` rather than returning `None` for an unknown name,
     which is the right contract for a lookup — a caller cannot forget to check — but
     it means the CLI has to catch it rather than test the result. An unknown job is
     also the mistake most likely to be a typo or a job that does not exist yet, so
     the message points at the command that lists what does.
+
+    The two cases the message has to keep apart are a name that is nothing at all and
+    a name that is a group, and the collision notice for a name that is both: see
+    `_explain_missing_job` and `_note_group_collision`. Both live here rather than in
+    `spectre run`, so `actions show` answers the same question the same way.
     """
     try:
-        return registry.get_job(name)
+        job = registry.get_job(name)
     except KeyError:
-        typer.echo(f"unknown job: {name}")
-        typer.echo("run `spectre actions list` to see every registered job")
+        _explain_missing_job(name)
         raise typer.Exit(EXIT_UNKNOWN_JOB) from None
+    _note_group_collision(name)
+    return job
 
 
 def _refuse_unprivileged(job: Job) -> None:

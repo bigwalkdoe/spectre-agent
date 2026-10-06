@@ -329,6 +329,122 @@ def test_run_records_provenance(actions: Path) -> None:
     assert row.git_dirty is False
 
 
+# ── groups: refused, but not called "unknown" ─────────────────────────────────
+
+# Every name that is both a registered job and a group name, read from the registry
+# at collection time so this stays honest if the registry changes: the collision set
+# is a fact about the data, not a list someone has to remember to update.
+COLLIDING_NAMES = sorted(set(registry.groups()) & {job.name for job in registry.JOBS})
+
+
+def test_run_a_group_name_exits_2_saying_it_is_a_group(actions: Path) -> None:
+    """A group is a real thing in the registry that `spectre run` cannot dispatch.
+
+    Calling it "unknown" tells the operator their mental model of the CLI is wrong,
+    when what is actually true is that a feature they saw in the design spec is
+    missing. So the message names the group, says group running is not implemented,
+    and points at the listing — and still exits 2, because nothing was dispatched.
+
+    Every job in the group is given a script that would leave a marker, so "nothing
+    ran" is checked rather than assumed: a partial group run is exactly the blast
+    radius the deferral exists to avoid.
+    """
+    markers = []
+    for job in registry.jobs_in_group("network"):
+        marker = actions / f"ran-{job.name.replace('/', '-')}"
+        _write(actions, job.action, f"#!/bin/bash\ntouch {marker}\n")
+        markers.append(marker)
+
+    result = runner.invoke(app, ["run", "network"])
+
+    assert result.exit_code == 2
+    assert "'network' is a group of 4 jobs" in result.stdout
+    assert "Running a whole group is not implemented" in result.stdout
+    assert "spectre actions list" in result.stdout
+    assert not [m for m in markers if m.exists()]
+
+
+def test_run_a_group_name_records_nothing(actions: Path) -> None:
+    before = {job.name: _rows(job.name) for job in registry.jobs_in_group("network")}
+    assert runner.invoke(app, ["run", "network"]).exit_code == 2
+    assert {job.name: _rows(job.name) for job in registry.jobs_in_group("network")} == before
+
+
+def test_actions_show_a_group_name_exits_2_saying_it_is_a_group(actions: Path) -> None:
+    """`actions show` answers the same question the same way: the group explanation
+    lives in the shared lookup, not in `spectre run`."""
+    result = runner.invoke(app, ["actions", "show", "security"])
+    assert result.exit_code == 2
+    assert "'security' is a group" in result.stdout
+    assert "not implemented" in result.stdout
+
+
+def test_run_a_colliding_name_runs_the_job_and_says_so(actions: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The job wins — it is the more specific reading — but the CLI says so.
+
+    Silence here would be the worst available answer: `deploy-monitoring` is a job
+    *and* a group, so an operator who meant the group would watch one job run, see
+    its output, and have no hint that a group of the same name existed. With 45 of
+    61 jobs mutating, that is a surprise with consequences.
+    """
+    _write(actions, "deploy-monitoring.sh", "#!/bin/bash\necho deploying the stack\n")
+    monkeypatch.setattr(dispatch_cmds.os, "geteuid", lambda: 0)
+
+    result = runner.invoke(app, ["run", "deploy-monitoring"])
+
+    assert result.exit_code == 0
+    assert "'deploy-monitoring' is both a registered job and a group name" in result.stdout
+    assert "running the job" in result.stdout
+    assert "deploying the stack" in result.stdout
+    # The record proves which reading was taken, so the notice is not just a claim.
+    assert recent_runs(job="deploy-monitoring", limit=1)[0].status == "success"
+
+
+@pytest.mark.parametrize("name", COLLIDING_NAMES)
+def test_every_colliding_name_is_announced_by_the_cli(
+    name: str, actions: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Checked against the CLI rather than against the registry, so a job that
+    resolved quietly — the original defect — fails here even though the registry
+    facts still hold.
+
+    The action is absent from this fixture's root, so each of these runs ends at
+    exit 3; the notice is printed before anything is resolved, and that ordering is
+    part of what is pinned.
+    """
+    monkeypatch.setattr(dispatch_cmds.os, "geteuid", lambda: 0)
+
+    result = runner.invoke(app, ["run", name])
+
+    assert f"'{name}' is both a registered job and a group name" in result.stdout
+    assert result.exit_code == 3
+
+
+def test_the_colliding_names_are_really_colliding() -> None:
+    """The empty case would make the tests above vacuous, so the set is asserted to
+    be populated — and its size is not pinned, because the registry may change."""
+    assert COLLIDING_NAMES
+    for name in COLLIDING_NAMES:
+        assert name in registry.groups()
+        assert registry.get_job(name).name == name
+
+
+def test_actions_show_a_colliding_name_mentions_the_group(actions: Path) -> None:
+    _write(actions, "deploy-monitoring.sh", "#!/bin/bash\nexit 0\n")
+    result = runner.invoke(app, ["actions", "show", "deploy-monitoring"])
+    assert result.exit_code == 0
+    assert "is both a registered job and a group name" in result.stdout
+
+
+def test_run_an_unknown_name_still_says_only_that_it_is_unknown(actions: Path) -> None:
+    """A name that is neither a job nor a group keeps the plain answer: the group
+    wording is reserved for a group, so it stays a fact."""
+    result = runner.invoke(app, ["run", "not-a-job-or-a-group"])
+    assert result.exit_code == 2
+    assert "unknown job: not-a-job-or-a-group" in result.stdout
+    assert "is a group of" not in result.stdout
+
+
 # ── sudo ─────────────────────────────────────────────────────────────────────
 
 
