@@ -683,7 +683,7 @@ git commit -m "feat(dispatch): per-job locks so mutating actions cannot interlea
 **Interfaces:**
 - Consumes: `Envelope` / `Status` (Task 3).
 - Produces:
-  - `MaintenanceRecord` gains: `trigger: str`, `exit_code: int | None`, `resolved_path: str`, `git_commit: str`, `git_dirty: bool`, `payload: str | None`.
+  - `MaintenanceRecord` gains: `trigger: str`, `exit_code: int | None`, `resolved_path: str`, `git_commit: str`, `git_dirty: bool`, `payload: str | None`, `stderr_tail: str | None`.
   - `def ensure_schema() -> list[str]` — idempotent column additions; returns the names of columns it added. Called from `init_db()`.
   - `def save_run(envelope: Envelope, agent: str = "dispatch") -> int` — returns the new row id. When `envelope.payload` carries a `findings` list, each entry is also inserted into `SecurityIncident` in the same transaction.
   - `def recent_runs(limit: int = 50, job: str | None = None) -> list[MaintenanceRecord]` — newest first.
@@ -804,7 +804,7 @@ def test_findings_in_a_payload_become_security_incidents() -> None:
         {"severity": "high", "rule": "backup-stale", "message": "last dump is 9 days old"},
         {"severity": "low", "rule": "log-noise", "message": "…"},
     ]}))
-    incidents = get_security_incidents(resolved=True, limit=200)
+    incidents = get_security_incidents(resolved=False, limit=200)
     assert {"backup-stale", "log-noise"} <= {i.rule_id for i in incidents}
     assert next(i for i in incidents if i.rule_id == "backup-stale").severity == "high"
 
@@ -842,7 +842,7 @@ sqlite3, not the SQLAlchemy engine:
 3. For each of the six columns absent from that set, issue
    `ALTER TABLE maintenancerecord ADD COLUMN <name> <type> NOT NULL DEFAULT <default>`,
    using `TEXT DEFAULT ''` for the string columns, `INTEGER` for `exit_code`
-   and `git_dirty`, and a nullable `TEXT` for `payload`.
+   and `git_dirty`, and a nullable `TEXT` for `payload` and `stderr_tail`.
 4. Return the list of added column names.
 
 Call `ensure_schema()` from `init_db()` after `SQLModel.metadata.create_all(...)`,
@@ -856,6 +856,7 @@ Immediately after `create_engine(...)`, wrap the connection setup in a
 
 `save_run` builds a `MaintenanceRecord` from the envelope — `action=env.job`,
 `agent="dispatch"`, `status=env.status.value`, `log_output=env.stdout_tail`,
+`stderr_tail=env.stderr_tail`,
 `duration_ms=env.duration_ms`, plus the six new fields — serialises `payload`
 with `json.dumps` when not `None`, and writes it through the existing
 `Session(engine)` pattern.
