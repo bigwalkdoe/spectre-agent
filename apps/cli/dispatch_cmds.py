@@ -272,12 +272,17 @@ def _growth() -> dict[str, str] | None:
     """Run-record counts per job as display cells, or `None` if the store cannot be read.
 
     `None` and `{}` are different answers and the distinction is the point of this
-    function: `{}` is an empty database, so every job genuinely has no rows and says
-    `0`, while `None` is a host whose store is missing, half-created or locked, and
-    every cell says `-`. Both are rendered, so the listing degrades rather than fails
-    — `actions list` is what an operator reaches for when something is already wrong,
-    and it touched no database at all until Task 9 added this column, so making it
-    depend on one would make it the first command to break.
+    function: `{}` is a store that exists and holds no rows, so every job genuinely has
+    none and says `0`, while `None` is a host whose store is missing, half-created or
+    locked, and every cell says `-`. Both are rendered, so the listing degrades rather
+    than fails — `actions list` is what an operator reaches for when something is
+    already wrong, and it read no database at all until Task 9 added this column, so
+    making it depend on one would make it the first command to break.
+
+    `FileNotFoundError` is caught for the case that is most common and least alarming:
+    a host that has never dispatched anything, which is every install before its first
+    run. `record_growth` checks the file rather than connecting, so asking here leaves
+    nothing on disk — this command still cannot create a database.
 
     `SQLAlchemyError` rather than `Exception`: a missing table and an unopenable file
     both arrive as `OperationalError`, and those are the failures being caught. A bug
@@ -285,7 +290,7 @@ def _growth() -> dict[str, str] | None:
     """
     try:
         counts = record_growth()
-    except SQLAlchemyError:
+    except (FileNotFoundError, SQLAlchemyError):
         return None
     return {name: str(count) for name, count in counts.items()}
 
