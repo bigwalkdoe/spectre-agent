@@ -168,6 +168,42 @@ def test_a_directory_named_like_an_action_is_reported_not_parsed(tmp_path: Path,
     assert str(root / "t" / "alpha.sh") in findings[0].detail
 
 
+def test_an_action_holding_a_nul_is_a_finding_not_a_crash(tmp_path: Path, registry: pytest.MonkeyPatch) -> None:
+    """The same expression `resolve` guards, guarded here too.
+
+    `(root / action).resolve()` raises `ValueError: embedded null character in path`
+    from the C layer, and `resolve` had just been hardened to turn exactly that into
+    a `DispatchError` while this loop kept calling the raw expression. So the comment
+    above it — "the same expression `resolve` uses, so the two cannot disagree" —
+    had stopped being true, and it mattered for a reason specific to this module: an
+    exception out of `verify` reaches the CLI's catch-all as exit 1, which is the
+    *same* code as "blocking findings present". A gate that crashed and a gate that
+    found problems were therefore indistinguishable in CI, which is the one failure
+    a preflight cannot be allowed to have.
+
+    A NUL cannot survive JSON in any useful registry. The point is not that this one
+    can arrive; it is that `missing` already means "this job cannot be dispatched",
+    and a registry entry the preflight cannot even name a path for is that.
+    """
+    _root(tmp_path, registry)
+    registry.setattr(verify_mod.registry, "JOBS", [make_job("ok\x00.sh")])
+
+    findings = [f for f in verify(HostInventory([], [])) if f.code == "missing"]
+
+    assert len(findings) == 1
+    assert "unusable action path" in findings[0].detail
+    # `repr`, so the detail carries `ok\x00.sh` rather than a NUL byte into the
+    # terminal, and the job it belongs to is named: `ok\x00` is what an operator
+    # greps the registry for.
+    assert r"ok\x00.sh" in findings[0].detail
+    assert findings[0].detail.startswith("ok\x00: ")
+    # The whole registry is judged, not just up to the job that could not be: the
+    # second job's own missing action is still reported behind it.
+    registry.setattr(verify_mod.registry, "JOBS", [make_job("ok\x00.sh"), _BETA])
+    codes = _codes(verify(HostInventory([], [])))
+    assert codes.count("missing") == 2
+
+
 def test_a_non_executable_action_is_a_finding(tmp_path: Path, registry: pytest.MonkeyPatch) -> None:
     """Executable, not merely present — a 0o644 script is what a git checkout or a
     `cp` without `-p` leaves behind, and `spectre run` refuses it too."""

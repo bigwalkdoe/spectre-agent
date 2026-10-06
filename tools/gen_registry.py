@@ -150,13 +150,53 @@ SUMMARIES: dict[str, str] = {
 # the only one wrongly left at the read-only defaults. The other three scheduled
 # jobs that keep the defaults — check-disk-space, network-monitor,
 # check-performance — were audited as genuinely read-only.
+#
+# `network/network-monitor` is stated explicitly rather than left to fall out of a
+# row it does not belong to, and it is the audit's read-only verdict applied to the
+# `network/` copy of it rather than a new judgement. Both copies ship the same
+# summary, so the sweep put a lock and a mutation flag on one of two entries
+# describing the same monitor — which cost two overlapping *manual* runs an exit 4,
+# and which made the `unlocked-mutation` read-only exemption inapplicable to it,
+# because a monitor the data calls mutating is not the thing the exemption is for.
+# Two rows carry it, on purpose: the explicit one documents the decision where a
+# reader of this table looks, and the narrowed `network/` matcher below makes that
+# statement hold regardless of row order, so reordering the table cannot silently
+# re-grant the lock.
+#
+# **`sudo: False` here is deliberate.** The script asks for no privilege — no
+# `sudo`, no root assertion — and writes only `$HOME/.local/share/network-monitor.log`
+# through a `mkdir -p` under the same `$HOME`. Its reads are `ip addr show`,
+# `netstat -i`, `ss -s` and `ss -tun`, all of which read world-readable netlink and
+# `/proc/net` state, and its two probes that genuinely can fail unprivileged —
+# the ICMP pings and `firewall-cmd --state` — are each written by their author to
+# degrade, with `|| echo ... FAILED` rather than `set -e` aborting the run. So the
+# only thing a root shell would buy is one informational log line less likely to say
+# "failed", in exchange for recording a privilege the script never asks for and
+# running a network reachability probe as root. It also matches what this table
+# already records for its twin, `maintenance/network-monitor`.
+READONLY_NETWORK_JOB = "network/network-monitor"
+
+
+def is_mutating_network_job(name: str) -> bool:
+    """Whether the `network/` group sweep applies to `name`.
+
+    A named predicate rather than a longer lambda because the exclusion is the whole
+    content of it, and `READONLY_NETWORK_JOB` is a fact this module states elsewhere.
+    Carving the monitor out here — and not merely ahead of the sweep in `OVERRIDES` —
+    is what makes the explicit row load-bearing in one direction only: reordering the
+    table cannot hand the monitor back to the group.
+    """
+    return name.startswith("network/") and name != READONLY_NETWORK_JOB
+
+
 OVERRIDES: list[tuple[Any, dict[str, Any]]] = [
+    (lambda n: n == READONLY_NETWORK_JOB, {}),
     (lambda n: n.startswith("backups/"), {"mutates": True, "concurrency": "forbid"}),
     (lambda n: n.startswith("maintenance/cleanup-"), {"mutates": True, "concurrency": "forbid"}),
     (lambda n: n == "maintenance/run-maintenance", {"mutates": True, "concurrency": "forbid"}),
     (lambda n: n == "maintenance/vacuum-databases", {"mutates": True, "concurrency": "forbid"}),
     (lambda n: n.startswith("security/"), {"sudo": True, "mutates": True, "concurrency": "forbid"}),
-    (lambda n: n.startswith("network/"), {"sudo": True, "mutates": True, "concurrency": "forbid"}),
+    (is_mutating_network_job, {"sudo": True, "mutates": True, "concurrency": "forbid"}),
     (lambda n: n.startswith("performance/optimize-"), {"sudo": True, "mutates": True, "concurrency": "forbid"}),
     (lambda n: n.startswith(("deploy-", "setup-")), {"sudo": True, "mutates": True, "concurrency": "forbid"}),
     (lambda n: n.startswith("project-specific/"), {"mutates": True, "concurrency": "forbid"}),
