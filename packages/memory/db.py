@@ -398,11 +398,31 @@ def _store_findings(session: Session, payload: dict[str, Any] | None, observed_a
     pass its own thousand-row limit the summary would truncate the newest of them:
     recurring dispatch findings would push genuine security-agent findings out of the
     window and the endpoint would report the truncated set as if it were the whole. So
-    a finding whose rule already has an open row refreshes that row — the same standing
+    a finding whose rule already has an open row updates that row — the same standing
     exposure, seen again — rather than adding a second.
 
     The upsert is also what makes §6.3's "the same store the Python agent uses" true:
     a store holding a duplicate of every recurring finding is not a shared store.
+
+    **`timestamp` on an incident is when the condition was FIRST seen, and a repeat
+    observation deliberately leaves it alone. Do not "fix" this by refreshing it.**
+    `get_security_summary` publishes it as `oldest_unresolved_timestamp`, a documented
+    field the Prometheus exporter consumes to report how long the oldest unresolved
+    condition has been standing. Refreshing it on every observation would make a
+    nine-day-old backup problem report as freshly seen, so the exporter would
+    under-report the age of a chronic condition and an operator reading the metric
+    would conclude the problem is new. That is the quiet dishonesty this store exists
+    to prevent, and it would be introduced here as a side effect of fixing saturation.
+
+    Nothing is lost by leaving it: "when was this last seen" is answered from the run
+    history, where every run is already recorded with its own `timestamp` and payload.
+    That is a more honest home for it than overwriting the first-seen date of the
+    incident it was first seen in.
+
+    Only `message` and `severity` follow the latest observation, and only when they
+    actually differ — so re-reporting an unchanged finding writes nothing at all,
+    rather than taking a write on a table the security agent also owns for every
+    dispatch run that re-reports something already known.
 
     Two findings for one rule inside a single payload collapse onto the same row, so a
     payload cannot reintroduce the duplication it is being deduplicated for. They are
@@ -413,12 +433,15 @@ def _store_findings(session: Session, payload: dict[str, Any] | None, observed_a
     for incident in _incidents_from_payload(payload):
         open_row = pending.get(incident.rule_id) or _incident_with_rule(session, incident.rule_id)
         if open_row is None:
-            open_row = incident
+            # A first sighting, so this is the moment it was first seen.
+            incident.timestamp = observed_at
             pending[incident.rule_id] = incident
-            session.add(open_row)
-        open_row.timestamp = observed_at
-        open_row.message = incident.message
-        open_row.severity = incident.severity
+            session.add(incident)
+            continue
+        if open_row.message != incident.message:
+            open_row.message = incident.message
+        if open_row.severity != incident.severity:
+            open_row.severity = incident.severity
 
 
 def _json_payload(payload: dict[str, Any] | None) -> str | None:
@@ -451,8 +474,9 @@ def save_run(envelope: Envelope, agent: str = "dispatch") -> int:
     writing, because the envelope already knows when the run began and the two differ
     by exactly the run's own duration — which is what a timed-out action has, and
     dating it to when its result was finally written would misdate the one run whose
-    timing is the reason anyone is reading the list. Its findings are stamped the
-    same way, since a finding was observed when the run that reported it happened.
+    timing is the reason anyone is reading the list. A finding's first sighting is
+    stamped the same way, since that is when the condition was first seen — a later
+    sighting of the same rule does not overwrite it.
 
     The row and any findings go in one session and one commit, so a run whose findings
     could not be written cannot be left behind claiming it had none: either the run
