@@ -55,14 +55,20 @@ no crontab. Neither is honest, so the gap is carried as a warning instead.
 The six codes, and what each one claims:
 
 ``missing``
-    The job's action is not present in the actions root, or is not a file. Two
+    The job's action is not present in the actions root, or is not a file. Three
     further cases land here because each is a job that cannot be dispatched and so
     cannot be reported as healthy: an action that resolves *outside* the root
     (`../escape.sh`, or an absolute path), where the detail says "resolves outside
-    the actions root" rather than calling it absent from disk; and a path that is a
+    the actions root" rather than calling it absent from disk; a path that is a
     *directory* named like a script, which passes both `exists()` and the executable
     bit — on a directory that bit means "may be traversed" — and would otherwise be
-    reported as a syntax error in a file that is not a script.
+    reported as a syntax error in a file that is not a script; and an `action` that
+    cannot be turned into a path at all (an embedded NUL, a path too long, a looped
+    symlink), which `resolve` refuses as an `unusable action path` and which must be
+    reported here for the same reason. That last case is a finding rather than a
+    traceback because this module is a CI gate: an exception out of `verify` reaches
+    the CLI's catch-all as exit 1, the same code as "blocking findings present", so a
+    gate that crashed and a gate that failed would report identically.
 ``not-executable``
     A file, but `os.access(..., os.X_OK)` is false. The mode a `git clone` or a
     `cp` without `-p` leaves behind.
@@ -420,10 +426,21 @@ def _registry_findings() -> list[Finding]:
     findings: list[Finding] = []
 
     for job in sorted(registry.JOBS, key=lambda entry: entry.name):
-        # The same expression `resolve` uses, so the two cannot disagree about what
-        # a job's action path is. Resolved, because a checkout may symlink its
-        # actions directory and an unresolved comparison would refuse everything.
-        target = (root / job.action).resolve()
+        # The same expression `resolve` uses, guarded the same way, so the two cannot
+        # disagree about what a job's action path is — including about a path neither
+        # can turn into one. Resolved, because a checkout may symlink its actions
+        # directory and an unresolved comparison would refuse everything.
+        try:
+            target = (root / job.action).resolve()
+        except (OSError, ValueError) as e:
+            # `ValueError` here is the embedded-NUL case; `OSError` is a path too long
+            # or a looped symlink. `resolve` raises `DispatchError` for both, and
+            # raising here instead would escape through `main`'s catch-all as exit 1 —
+            # the same code as "blocking findings present", so a crashed gate would be
+            # indistinguishable from a failing one. A preflight that cannot judge a job
+            # has to report it; that is what `missing` means for every other job here.
+            findings.append(Finding(MISSING, f"{job.name}: unusable action path {job.action!r}: {e}"))
+            continue
 
         if not target.is_relative_to(root):
             findings.append(

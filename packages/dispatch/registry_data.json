@@ -314,10 +314,7 @@
     "name": "network/network-monitor",
     "action": "network/network-monitor.sh",
     "group": "network",
-    "summary": "Monitor network connectivity and performance",
-    "sudo": true,
-    "mutates": true,
-    "concurrency": "forbid"
+    "summary": "Monitor network connectivity and performance"
   },
   {
     "name": "network/network-security-hardening",
