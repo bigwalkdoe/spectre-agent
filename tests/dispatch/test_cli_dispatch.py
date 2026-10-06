@@ -1,0 +1,472 @@
+"""Tests for `spectre run` and `spectre actions`, the dispatch CLI surface.
+
+The exit codes are this module's real subject, because they are the CLI's only
+contract with cron: `0` success, `2` unknown job, `3` not dispatchable, `4`
+another run holds the lock, `5` the run failed or timed out. Each of those is
+pinned below against a real action, a real registry entry and a real lock file —
+nothing here stubs the runner, the resolver or the lock, because every one of
+those decisions is made here and stubbing them would test the stub.
+
+Three of these tests exist because the naive version of them would have passed
+for the wrong reason, and are commented where that is true:
+
+* a failing action is `backups/backup-all` with its script overwritten, not a
+  `backups/backup-fail` job — that name is not in the 61-job registry, so asking
+  for it exits `2` (unknown job) and a test expecting `5` would go green on a
+  refusal;
+* the timeout test replaces a real registry entry's `timeout` with `1` rather
+  than inventing a job, because the claim under test is that the CLI passes
+  `Job.timeout` through, and only a real entry can carry the other fields that
+  decide what happens around it;
+* the sudo tests pin a refusal that runs nothing, so a "sudo job ran as an
+  unprivileged user" regression cannot pass as a success.
+
+Hermeticity: `SPECTRE_ACTIONS_ROOT` points at a per-test `tmp_path` holding only
+the scripts written here, and `SPECTRE_CONFIG_DIR` at a per-test directory so
+lock files never touch a real tree or each other. The run records go to the
+session-wide throwaway database `tests/conftest.py` installed before
+`packages.memory.db` was imported. Nothing here reaches the host's own actions,
+crontab, systemd or `~/.config/spectre`.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import stat
+import time
+from dataclasses import replace
+from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
+from typer.testing import CliRunner
+
+import apps.cli.dispatch_cmds as dispatch_cmds
+from apps.cli.main import app
+from packages.dispatch import registry
+from packages.dispatch.lock import lock_path
+from packages.memory.db import recent_runs
+
+runner = CliRunner()
+
+# A real registry job with sudo=false and concurrency=forbid, so the lock is
+# exercised by the ordinary success and failure paths as well as by their own
+# tests. `backups/backup-databases` is the other such job: never written by the
+# fixture, which is what makes it the missing-action case.
+JOB = "backups/backup-all"
+MISSING_JOB = "backups/backup-databases"
+
+# A real registry job with sudo=true *and* concurrency=forbid, so the sudo
+# refusal and the lock-release-on-refusal assertions have a job that would
+# otherwise have left a lock file behind.
+SUDO_JOB = "security/run-security-hardening"
+
+
+def _write(root: Path, name: str, body: str, executable: bool = True) -> Path:
+    """Write an action under the actions root and make it executable.
+
+    `write_text` alone leaves 0o644, and `resolve` refuses a non-executable
+    action, so a fixture that skips the mode would fail on the wrong check.
+    """
+    path = root / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body)
+    if executable:
+        path.chmod(path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    return path
+
+
+@pytest.fixture
+def actions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A throwaway actions root holding only `JOB`'s script, plus a per-test config dir.
+
+    The config directory is what `JobLock` reads at call time, so pointing it at
+    `tmp_path` is what keeps one test's lock file out of the next one's way.
+    """
+    root = tmp_path / "actions"
+    _write(root, "backups/backup-all.sh", "#!/bin/bash\necho backed up\nexit 0\n")
+    monkeypatch.setenv("SPECTRE_ACTIONS_ROOT", str(root))
+    monkeypatch.setenv("SPECTRE_CONFIG_DIR", str(tmp_path / "cfg"))
+    return root
+
+
+def _rows(job: str) -> list[int | None]:
+    """The ids of `job`'s run records, newest first.
+
+    Ids rather than whole rows because every use of this is a before/after
+    comparison: the question a refusal or a lock has to answer is "did a record
+    appear?", and comparing the id set says that without depending on what the row
+    contains.
+    """
+    return [r.id for r in recent_runs(job=job, limit=20) if r.action == job]
+
+
+# ── spectre run ──────────────────────────────────────────────────────────────
+
+
+def test_run_executes_and_echoes_its_output(actions: Path) -> None:
+    """The action's output reaches the operator.
+
+    Not streamed live: the runner bounds both streams to the envelope's
+    head-and-tail window while it reads them, so what the CLI prints is the same
+    bounded text a run record keeps. Printing it is still the point — a run whose
+    output went nowhere is indistinguishable from a run that never happened.
+    """
+    result = runner.invoke(app, ["run", JOB])
+    assert result.exit_code == 0
+    assert "backed up" in result.stdout
+
+
+def test_run_unknown_job_exits_2(actions: Path) -> None:
+    """`get_job` raises KeyError rather than returning None, so the CLI turns
+    that into `unknown job` and exit 2 — never into a traceback, and never into a
+    dispatch of something it guessed at."""
+    result = runner.invoke(app, ["run", "backups/nope"])
+    assert result.exit_code == 2
+    assert "unknown job" in result.stdout
+
+
+def test_run_unknown_job_records_nothing(actions: Path) -> None:
+    before = _rows("backups/nope")
+    runner.invoke(app, ["run", "backups/nope"])
+    assert _rows("backups/nope") == before
+
+
+def test_run_missing_action_exits_3(actions: Path) -> None:
+    result = runner.invoke(app, ["run", MISSING_JOB])
+    assert result.exit_code == 3
+    assert MISSING_JOB in result.stdout
+
+
+def test_run_non_executable_action_exits_3(actions: Path) -> None:
+    """Executable, not merely present: a 0o644 action is refused the same way, and
+    the reason names the file so the fix is obvious."""
+    _write(actions, "backups/backup-databases.sh", "#!/bin/bash\nexit 0\n", executable=False)
+    result = runner.invoke(app, ["run", MISSING_JOB])
+    assert result.exit_code == 3
+    assert "executable" in result.stdout
+
+
+def test_run_missing_action_records_nothing(actions: Path) -> None:
+    before = _rows(MISSING_JOB)
+    runner.invoke(app, ["run", MISSING_JOB])
+    assert _rows(MISSING_JOB) == before
+
+
+def test_run_failure_exits_5_and_records(actions: Path) -> None:
+    """A non-zero exit is `failed`, exit 5, and the record keeps the stderr tail.
+
+    The action is the real `backups/backup-all` with its own script overwritten:
+    there is no `backups/backup-fail` job, so dispatching one would exit 2 and
+    this assertion would be green for a refusal rather than for a failure.
+    """
+    _write(actions, "backups/backup-all.sh", "#!/bin/bash\necho nope >&2\nexit 3\n")
+    before = _rows(JOB)
+    result = runner.invoke(app, ["run", JOB])
+    assert result.exit_code == 5
+    assert "nope" in result.stdout
+
+    rows = recent_runs(job=JOB, limit=1)
+    assert rows[0].id not in before
+    assert rows[0].status == "failed"
+    assert rows[0].exit_code == 3
+    assert "nope" in (rows[0].stderr_tail or "")
+
+
+def test_run_releases_the_lock_after_a_failure(actions: Path) -> None:
+    """`JOB` is concurrency=forbid, so a failed run that kept its lock would
+    block the next one for twice the timeout — the single failure mode the lock
+    cannot be allowed to have."""
+    _write(actions, "backups/backup-all.sh", "#!/bin/bash\nexit 3\n")
+    assert runner.invoke(app, ["run", JOB]).exit_code == 5
+    assert not lock_path(registry.get_job(JOB)).exists()
+
+
+def test_run_lock_held_exits_4_and_names_the_holder(actions: Path) -> None:
+    """Exit 4 names the holding pid and when it started, because "already
+    running" is only actionable once you know by whom.
+
+    The lock names this very process, which is alive, so it is a live holder by
+    the same liveness test the lock itself uses — no extra process needed.
+    """
+    job = registry.get_job(JOB)
+    started = datetime.now(UTC)
+    path = lock_path(job)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"pid": os.getpid(), "started_at": started.isoformat()}), encoding="utf-8")
+
+    before = _rows(JOB)
+    result = runner.invoke(app, ["run", JOB])
+
+    assert result.exit_code == 4
+    assert str(os.getpid()) in result.stdout
+    assert started.isoformat() in result.stdout
+    assert _rows(JOB) == before
+    # The refusal must leave the real holder's lock exactly as it found it.
+    assert path.exists()
+
+
+def test_run_passes_the_job_timeout(actions: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`run_action`'s `timeout=None` means *no timeout*, so a caller that forgets
+    to pass `Job.timeout` produces a CLI that cannot stop a runaway action. Every
+    registry job currently has `timeout=1800`, which is exactly why that mistake
+    would stay invisible: it needs a different value to show up at all.
+
+    A real registry entry is used with only `timeout` replaced, because the claim
+    is about what the CLI reads off the entry, not about a job that does not exist.
+    """
+    _write(actions, "backups/backup-all.sh", "#!/bin/bash\nsleep 30\n")
+    monkeypatch.setattr(
+        registry,
+        "JOBS",
+        [replace(j, timeout=1) if j.name == JOB else j for j in registry.JOBS],
+    )
+
+    started = time.monotonic()
+    result = runner.invoke(app, ["run", JOB])
+    elapsed = time.monotonic() - started
+
+    assert result.exit_code == 5
+    # The action sleeps 30s and the job allows 1s. Elapsed is asserted as well as
+    # the exit code because "it returned" and "it was stopped" are different claims.
+    assert elapsed < 15
+    row = recent_runs(job=JOB, limit=1)[0]
+    assert row.status == "timeout"
+    assert row.exit_code is None
+
+
+def test_run_records_into_a_database_that_did_not_exist(
+    actions: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A host with no `memory.db` yet must still get a run record.
+
+    Found by running the CLI, not by reading it: `save_run` inserts into
+    `maintenancerecord`, and on a fresh config directory that table does not exist
+    until something creates it, so the first `spectre run` on a fresh host died with
+    `no such table: maintenancerecord` *after* the action had already run. Every
+    other command in `main.py` calls `init_db()` first for the same reason, and a
+    migrated host needs it too — `ensure_schema` is what adds the provenance columns
+    to a table that predates them.
+
+    The store is redirected at a file that does not exist rather than stubbed, so
+    this is the real `init_db` and the real `save_run` writing a real database.
+    """
+    from sqlmodel import Session, create_engine, select
+
+    from packages.memory import db as db_module
+
+    fresh = tmp_path / "fresh-config" / "memory.db"
+    fresh.parent.mkdir(parents=True)
+    engine = create_engine(f"sqlite:///{fresh}", connect_args={"check_same_thread": False})
+    monkeypatch.setattr(db_module, "engine", engine)
+
+    assert runner.invoke(app, ["run", JOB]).exit_code == 0
+
+    with Session(engine) as session:
+        rows = list(session.exec(select(db_module.MaintenanceRecord)).all())
+    assert [row.action for row in rows] == [JOB]
+    assert rows[0].trigger == "cli"
+
+
+def test_run_records_a_real_commit_when_actions_are_a_repo(actions: Path) -> None:
+    """Full wiring: resolve -> provenance -> run record, against a real repository."""
+    import subprocess
+
+    env = {
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_SYSTEM": "/dev/null",
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@t",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@t",
+    }
+    subprocess.run(["git", "init", "-q"], cwd=actions, check=True, env=env)
+    subprocess.run(["git", "add", "-A"], cwd=actions, check=True, env=env)
+    subprocess.run(["git", "commit", "-qm", "x"], cwd=actions, check=True, env=env)
+
+    runner.invoke(app, ["run", JOB])
+    row = recent_runs(job=JOB, limit=1)[0]
+    expected = subprocess.run(
+        ["git", "rev-parse", "--short", "HEAD"],
+        cwd=actions,
+        capture_output=True,
+        text=True,
+        check=True,
+        env=env,
+    ).stdout.strip()
+    assert row.git_commit == expected
+    assert row.git_dirty is False
+
+
+def test_run_forwards_arguments(actions: Path) -> None:
+    """Arguments after the job go to the action and are not parsed as spectre's
+    own options — `--dry-run` is the action's flag, not spectre's."""
+    _write(actions, "backups/backup-all.sh", '#!/bin/bash\necho "a=$1"\n')
+    result = runner.invoke(app, ["run", JOB, "--", "--dry-run"])
+    assert result.exit_code == 0
+    assert "a=--dry-run" in result.stdout
+
+
+def test_run_does_not_interpret_action_output_as_markup(actions: Path) -> None:
+    """The app is built with rich markup, and an action's output is not spectre's
+    to annotate: `[disk-full]` has to survive as the text the action wrote."""
+    _write(actions, "backups/backup-all.sh", "#!/bin/bash\necho 'failed: [disk-full]'\n")
+    result = runner.invoke(app, ["run", JOB])
+    assert "[disk-full]" in result.stdout
+
+
+def test_run_records_provenance(actions: Path) -> None:
+    result = runner.invoke(app, ["run", JOB])
+    assert result.exit_code == 0
+    row = recent_runs(job=JOB, limit=1)[0]
+    assert row.trigger == "cli"
+    assert row.resolved_path.endswith("backups/backup-all.sh")
+    # A plain tmp_path actions root is not a git repository, so provenance
+    # degrades to empty rather than raising. Assert the degradation here; the
+    # real git-reading path is pinned by tests/dispatch/test_resolve.py.
+    assert row.git_commit == ""
+    assert row.git_dirty is False
+
+
+# ── sudo ─────────────────────────────────────────────────────────────────────
+
+
+def test_run_refuses_a_sudo_job_when_not_root(actions: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Refuse, and print the exact command to run.
+
+    Running it unprivileged instead would produce a partial failure or a
+    misleading success, and the run record would faithfully log a privileged job
+    having run as an unprivileged user. The exit code is 3 and not 5: nothing
+    ran, and 5 means the run failed.
+    """
+    marker = actions / "ran-anyway"
+    _write(actions, f"{SUDO_JOB}.sh", f"#!/bin/bash\ntouch {marker}\nexit 0\n")
+    monkeypatch.setattr(dispatch_cmds.os, "geteuid", lambda: 1000)
+
+    result = runner.invoke(app, ["run", SUDO_JOB])
+
+    assert result.exit_code == 3
+    assert f"sudo spectre run {SUDO_JOB}" in result.stdout
+    assert not marker.exists()
+
+
+def test_run_refuses_a_sudo_job_without_recording_a_run(actions: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The refusal records nothing: a record of a privileged job that never
+    executed would be a lie the run history could not correct later."""
+    _write(actions, f"{SUDO_JOB}.sh", "#!/bin/bash\nexit 0\n")
+    monkeypatch.setattr(dispatch_cmds.os, "geteuid", lambda: 1000)
+
+    before = _rows(SUDO_JOB)
+    assert runner.invoke(app, ["run", SUDO_JOB]).exit_code == 3
+    assert _rows(SUDO_JOB) == before
+
+
+def test_run_releases_the_lock_after_a_sudo_refusal(actions: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`SUDO_JOB` is concurrency=forbid, and the refusal happens while the lock is
+    held — so a lock leaked here would block this privileged job for twice its
+    timeout because someone forgot a password."""
+    _write(actions, f"{SUDO_JOB}.sh", "#!/bin/bash\nexit 0\n")
+    monkeypatch.setattr(dispatch_cmds.os, "geteuid", lambda: 1000)
+
+    assert runner.invoke(app, ["run", SUDO_JOB]).exit_code == 3
+    assert not lock_path(registry.get_job(SUDO_JOB)).exists()
+
+
+def test_run_runs_a_sudo_job_when_already_root(actions: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Root needs no special case: the refusal is about not being root, and a
+    process that already is root is exactly what the job asked for."""
+    _write(actions, f"{SUDO_JOB}.sh", "#!/bin/bash\necho did the privileged thing\n")
+    monkeypatch.setattr(dispatch_cmds.os, "geteuid", lambda: 0)
+
+    result = runner.invoke(app, ["run", SUDO_JOB])
+    assert result.exit_code == 0
+    assert "did the privileged thing" in result.stdout
+    assert recent_runs(job=SUDO_JOB, limit=1)[0].status == "success"
+
+
+# ── spectre actions ──────────────────────────────────────────────────────────
+
+
+def test_actions_list_shows_the_registry() -> None:
+    result = runner.invoke(app, ["actions", "list"])
+    assert result.exit_code == 0
+    assert "backups/backup-all" in result.stdout
+    assert "backups/backup-databases" in result.stdout
+
+
+def test_actions_list_shows_every_registered_job() -> None:
+    """A job missing from the listing is a job nobody can discover, so the whole
+    registry is asserted rather than a couple of representative names."""
+    result = runner.invoke(app, ["actions", "list"])
+    missing = [job.name for job in registry.JOBS if job.name not in result.stdout]
+    assert missing == []
+
+
+def test_actions_list_shows_sudo_mutates_timeout_and_schedule() -> None:
+    """The listing is the operator's whole map of what a job will do before
+    running it, so the four fields that decide that are columns: `sudo`,
+    `mutates`, `timeout`, `schedule_hint`.
+
+    The columns are plain aligned text rather than a Rich table because Rich
+    truncates columns to the terminal width, which silently mangles the job name
+    an operator has to copy into `spectre run`. A listing that cannot be copied
+    is worse than one that is not decorated.
+    """
+    result = runner.invoke(app, ["actions", "list"])
+    for header in ("sudo", "mutates", "timeout", "schedule"):
+        assert header in result.stdout
+
+
+def test_actions_list_reports_a_sudo_jobs_metadata() -> None:
+    """21 of the 61 jobs need root. A listing that hid that would send an
+    operator into a failure they could have read off the list instead."""
+    result = runner.invoke(app, ["actions", "list"])
+    rows = {line.split()[0]: line for line in result.stdout.splitlines() if line.strip()}
+    sudo_row = rows[SUDO_JOB]
+    assert "true" in sudo_row.split()[1:]  # sudo
+    plain = rows[JOB]
+    assert "false" in plain.split()[1:]  # sudo=false, so this job needs no root
+
+
+def test_actions_list_reports_the_schedule_hint() -> None:
+    result = runner.invoke(app, ["actions", "list"])
+    row = next(line for line in result.stdout.splitlines() if line.startswith(JOB))
+    assert "0 2 * * 6" in row
+
+
+def test_actions_show_reports_provenance(actions: Path) -> None:
+    result = runner.invoke(app, ["actions", "show", JOB])
+    assert result.exit_code == 0
+    assert "backup-all.sh" in result.stdout
+    assert str(actions) in result.stdout
+
+
+def test_actions_show_reports_the_owning_scheduler(actions: Path) -> None:
+    """`replaces` is the migration ledger: what this job superseded, and so which
+    scheduler entry is now redundant."""
+    result = runner.invoke(app, ["actions", "show", JOB])
+    assert "crontab:0 2 * * 6" in result.stdout
+
+
+def test_actions_show_unknown_exits_2(actions: Path) -> None:
+    result = runner.invoke(app, ["actions", "show", "nope/nope"])
+    assert result.exit_code == 2
+    assert "unknown job" in result.stdout
+
+
+def test_actions_show_missing_action_exits_3(actions: Path) -> None:
+    """Registered but not dispatchable is exit 3 here too: the same fact about the
+    same job should not have two exit codes depending on which command found it."""
+    result = runner.invoke(app, ["actions", "show", MISSING_JOB])
+    assert result.exit_code == 3
+
+
+def test_actions_does_not_offer_verify() -> None:
+    """`verify` is a preflight that has to decide something. A stub that decides
+    nothing would advertise a capability the CLI does not have, which is the doc
+    drift `actions verify` itself exists to catch."""
+    result = runner.invoke(app, ["actions", "--help"])
+    assert result.exit_code == 0
+    assert "verify" not in result.stdout
+    assert runner.invoke(app, ["actions", "verify"]).exit_code != 0

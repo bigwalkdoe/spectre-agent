@@ -13,6 +13,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from apps.cli.dispatch_cmds import register as register_dispatch_commands
 from packages.config.settings import load_settings
 from packages.core.kernel import Kernel
 from packages.core.service_bus import ServiceBus
@@ -29,6 +30,12 @@ app = typer.Typer(
     no_args_is_help=True,
     rich_markup_mode="rich",
 )
+
+# The dispatch layer's commands (`run`, `actions`) live in their own module and are
+# attached here, so main.py stays a table of contents rather than a second home for
+# everything spectre can do.
+register_dispatch_commands(app)
+
 console = Console()
 
 # Lazy-loaded globals
