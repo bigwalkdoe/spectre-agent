@@ -94,6 +94,7 @@ import os
 from typing import Annotated
 
 import typer
+from sqlalchemy.exc import SQLAlchemyError
 
 from packages.dispatch import registry
 from packages.dispatch import verify as verify_mod
@@ -101,6 +102,7 @@ from packages.dispatch.envelope import Status
 from packages.dispatch.lock import JobLock, LockUnavailable
 from packages.dispatch.registry import Job
 from packages.dispatch.resolve import DispatchError, ResolvedAction, actions_root, resolve
+from packages.dispatch.retention import UNKNOWN_JOB, record_growth
 from packages.dispatch.runner import run_action
 from packages.dispatch.verify import Finding
 from packages.memory.db import init_db, save_run
@@ -128,9 +130,15 @@ actions_app = typer.Typer(
 
 # Column order for `actions list`, and the value shown for a job with no
 # `schedule_hint`. "manual" rather than "-" because it says what it means: the job
-# exists and is dispatchable by hand, and nothing schedules it.
-_LIST_HEADERS = ("job", "sudo", "mutates", "timeout", "schedule")
+# exists and is dispatchable by hand, and nothing schedules it. `rows` is last
+# because it is a measurement of this host rather than metadata about the job, and
+# the fields an operator copies out of a line should stay as far left as possible.
+_LIST_HEADERS = ("job", "sudo", "mutates", "timeout", "schedule", "rows")
 _UNSCHEDULED = "manual"
+
+# What the `rows` column reads when the run store cannot be asked. Not `0`, which is
+# a claim about the data, and not blank, which is unreadable in a piped line.
+_NO_GROWTH = "-"
 
 
 def _bool(value: bool) -> str:
@@ -260,18 +268,52 @@ def _describe(job: Job, resolved: ResolvedAction) -> None:
         typer.echo(f"{label + ':':<{width + 1}}  {value}")
 
 
+def _growth() -> dict[str, str] | None:
+    """Run-record counts per job as display cells, or `None` if the store cannot be read.
+
+    `None` and `{}` are different answers and the distinction is the point of this
+    function: `{}` is an empty database, so every job genuinely has no rows and says
+    `0`, while `None` is a host whose store is missing, half-created or locked, and
+    every cell says `-`. Both are rendered, so the listing degrades rather than fails
+    — `actions list` is what an operator reaches for when something is already wrong,
+    and it touched no database at all until Task 9 added this column, so making it
+    depend on one would make it the first command to break.
+
+    `SQLAlchemyError` rather than `Exception`: a missing table and an unopenable file
+    both arrive as `OperationalError`, and those are the failures being caught. A bug
+    in this module should still surface as a traceback.
+    """
+    try:
+        counts = record_growth()
+    except SQLAlchemyError:
+        return None
+    return {name: str(count) for name, count in counts.items()}
+
+
 @actions_app.command("list")
 def actions_list() -> None:
-    """Every registered job, with the four fields that decide how to run it.
+    """Every registered job, with the four fields that decide how to run it and how
+    much run history it has accumulated.
 
     Plain aligned text rather than a Rich table, and that is not a stylistic
     preference: Rich fits columns to the terminal width and truncates what does not
     fit, so on an 80-column terminal the job name — the one field an operator has
     to copy into `spectre run` — is exactly what gets cut. A listing that cannot be
     copied from is worse than one that is not decorated, and this output is read by
-    grep as often as by eye.
+    grep as often as by eye. The `rows` column makes that trade worse rather than
+    better, which is why it is measured from its contents like every other column's
+    and, being last, is not padded at all: a width fixed for the widest number would
+    add trailing spaces to all 61 piped lines and accommodate nothing.
+
+    Rows belonging to no registered job are reported once, below the table, because
+    they have no job row to sit in and there are a great many of them — on the host
+    this was written against, every one of the 140,385 rows in the run store is one,
+    written by the agent that predates the registry. Reporting them is not
+    decoration: without the line the column reads as all zeroes under a table holding
+    140k rows, which is the opposite of what is true.
     """
     jobs = sorted(registry.JOBS, key=lambda job: job.name)
+    growth = _growth()
     rows = [
         (
             job.name,
@@ -279,6 +321,7 @@ def actions_list() -> None:
             _bool(job.mutates),
             str(job.timeout),
             job.schedule_hint or _UNSCHEDULED,
+            _NO_GROWTH if growth is None else growth.get(job.name, "0"),
         )
         for job in jobs
     ]
@@ -291,6 +334,13 @@ def actions_list() -> None:
     typer.echo("  ".join(header.ljust(widths[i]) for i, header in enumerate(_LIST_HEADERS)).rstrip())
     for row in rows:
         typer.echo("  ".join(cell.ljust(widths[i]) for i, cell in enumerate(row[:-1])) + f"  {row[-1]}")
+
+    unattributed = growth.get(UNKNOWN_JOB) if growth is not None else None
+    if unattributed:
+        typer.echo(
+            f"note: {unattributed} run record(s) belong to no registered job "
+            f"('{UNKNOWN_JOB}'); `spectre actions show` cannot describe them."
+        )
 
 
 @actions_app.command("show")

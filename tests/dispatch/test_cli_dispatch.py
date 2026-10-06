@@ -40,15 +40,16 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from sqlmodel import Session, SQLModel, create_engine
 from typer.testing import CliRunner
 
 import apps.cli.dispatch_cmds as dispatch_cmds
 from apps.cli.dispatch_cmds import EXIT_FAILED, EXIT_LOCKED, EXIT_NOT_DISPATCHABLE, EXIT_OK, EXIT_UNKNOWN_JOB
 from apps.cli.main import app
-from packages.dispatch import registry
+from packages.dispatch import registry, retention
 from packages.dispatch.lock import lock_path
 from packages.dispatch.verify import ALL_CODES, HostInventory
-from packages.memory.db import recent_runs
+from packages.memory.db import MaintenanceRecord, recent_runs
 
 runner = CliRunner()
 
@@ -133,21 +134,63 @@ def _listing(stdout: str) -> dict[str, dict[str, str]]:
 
     The column *name* is read out of the header row rather than assumed, so a
     column that is renamed or reordered turns into a missing key here instead of
-    silently comparing the wrong cell — which is exactly how the previous version of
-    the sudo test came to pass against swapped columns.
+    silently comparing the wrong cell — which is exactly how the previous version
+    of the sudo test came to pass against swapped columns.
 
-    `maxsplit` leaves the schedule hint whole: `0 2 * * 6` is five whitespace-
-    separated words, and splitting it across cells would make every job's schedule
-    look like a mangled one.
+    The schedule hint is the only multi-word cell (`0 2 * * 6` is five words), so
+    it is the reason this cannot split a line into cells and hope. The trailing
+    `rows` column is always a single token — a count or `-` — and is therefore taken
+    off the right; the rest is split by column count, which leaves the hint whole.
+    Splitting the whole line by column count from the left instead would let the
+    hint swallow the number after it, and every job's `schedule` would read as a
+    fragment.
+
+    `note:` lines are skipped: they report rows the table has no job row for, and
+    `zip(..., strict=True)` would otherwise read the first word of a sentence as a
+    job name and add it to the table.
     """
-    lines = [line for line in stdout.splitlines() if line.strip()]
+    lines = [line for line in stdout.splitlines() if line.strip() and not line.startswith("note:")]
     headers = lines[0].split()
     table: dict[str, dict[str, str]] = {}
     for line in lines[1:]:
-        cells = line.split(maxsplit=len(headers) - 1)
+        head, last = line.rstrip().rsplit(None, 1)
+        cells = [*head.split(maxsplit=len(headers) - 2), last]
         row = dict(zip(headers, cells, strict=True))
         table[row["job"]] = row
     return table
+
+
+def _store_with_rows(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, rows: dict[str, int]) -> None:
+    """Give the growth column a database of its own, holding `rows` per action.
+
+    The session-wide throwaway database would do, except its contents depend on which
+    tests ran first — so a count asserted here would be a count of the suite's history
+    rather than of anything this test arranged.
+    """
+    store = create_engine(f"sqlite:///{tmp_path / 'runs.db'}")
+    SQLModel.metadata.create_all(store)
+    with Session(store) as session:
+        for action, count in rows.items():
+            for _ in range(count):
+                session.add(
+                    MaintenanceRecord(agent="dispatch", action=action, status="success", log_output="", duration_ms=1)
+                )
+        session.commit()
+    monkeypatch.setattr(retention, "engine", store)
+
+
+def _unreadable_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, name: str) -> None:
+    """Point retention at a database that cannot be read, without faking the failure.
+
+    `empty.db` has no `maintenancerecord` — which is what every host that has not
+    dispatched anything yet looks like — and `blocked.db` is a directory, so SQLite
+    cannot open it at all. Both raise from the real query inside `record_growth`,
+    rather than from a stub that decides to raise.
+    """
+    target = tmp_path / name
+    if name.startswith("blocked"):
+        target.mkdir()
+    monkeypatch.setattr(retention, "engine", create_engine(f"sqlite:///{target}"))
 
 
 # ── spectre run ──────────────────────────────────────────────────────────────
@@ -674,10 +717,110 @@ def test_actions_list_reports_every_job_metadata_positionally() -> None:
 def test_actions_list_column_order_is_the_documented_one() -> None:
     """The contract the two tests above rest on: column 1 is `sudo`, column 2 is
     `mutates`, and so on. Pinned here because a reordering would otherwise be
-    caught only as a confusing value mismatch rather than as an order change."""
+    caught only as a confusing value mismatch rather than as an order change.
+
+    `rows` is last, and is a growth figure rather than job metadata — so it cannot
+    push `job`, the field an operator copies into `spectre run`, any further right."""
     result = runner.invoke(app, ["actions", "list"])
     header = next(line for line in result.stdout.splitlines() if line.strip())
-    assert header.split() == ["job", "sudo", "mutates", "timeout", "schedule"]
+    assert header.split() == ["job", "sudo", "mutates", "timeout", "schedule", "rows"]
+
+
+def test_actions_list_reports_run_row_growth_per_job(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The last column is how much run history a job has accumulated.
+
+    It is the figure `prune` acts on, shown where an operator is already looking:
+    a job with 100,000 rows and one with 12 differ by four orders of magnitude and
+    the listing is what says so before anyone wonders why the database is 28 MB.
+
+    The count is read positionally, by the column *name* out of the header row, so a
+    column that moved or a `-` that replaced a number is a failure here rather than a
+    value quietly compared against the wrong cell.
+    """
+    _store_with_rows(monkeypatch, tmp_path, {JOB: 3})
+    table = _listing(runner.invoke(app, ["actions", "list"]).stdout)
+    assert table[JOB]["rows"] == "3"
+    # A job that has never run is zero, not blank and not a dash: "no history" is a
+    # fact about the job.
+    assert table[SUDO_JOB]["rows"] == "0"
+
+
+def test_actions_list_says_how_many_rows_belong_to_no_registered_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Rows whose action names no job are reported outside the table, in one line.
+
+    They have no row of their own to sit in — the table lists jobs — and on the live
+    database they are all 140,385 of them, under the legacy agent's bare action names.
+    A per-job column showing `0` under all 61 jobs while that is true would be worse
+    than no column: it would read as "nothing is accumulating".
+    """
+    _store_with_rows(monkeypatch, tmp_path, {JOB: 1, "collect-metrics": 2, "check-thresholds": 3})
+    result = runner.invoke(app, ["actions", "list"])
+    note = next(line for line in result.stdout.splitlines() if line.startswith("note:"))
+
+    assert "5" in note, note
+    assert retention.UNKNOWN_JOB in note, note
+    assert _listing(result.stdout)[JOB]["rows"] == "1"
+
+
+def test_actions_list_does_not_pad_the_rows_column(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The count is printed as the number, never padded into a fixed field.
+
+    A width for this column would have to be either measured from its contents or
+    guessed, and a guess is visible: pad to six and every one of the 61 lines ends in
+    spaces, in piped output, for 59 rows that are `0`. The columns to the left are
+    padded — that is what makes them readable — but this one is last and nothing
+    follows it, so its width buys nothing and costs trailing whitespace.
+    """
+    _store_with_rows(monkeypatch, tmp_path, {JOB: 1234})
+    lines = [line for line in runner.invoke(app, ["actions", "list"]).stdout.splitlines() if line.strip()]
+
+    wide = next(line for line in lines if line.startswith(JOB))
+    assert wide.endswith(" 1234"), wide
+    assert [line for line in lines if line != line.rstrip()] == []
+
+
+def test_actions_list_lists_every_job_when_the_store_has_no_run_table(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`actions list` is the discovery command — "what can I run?" — and it must not
+    become the first thing to break on a host where things are already broken.
+
+    A database with no `maintenancerecord` is every fresh install, and one whose
+    database was removed or half-created. So the growth column degrades to `-` and
+    the registry still prints in full.
+
+    `-` rather than `0` is the substance of it: zero is a claim about the database,
+    and an unreadable database is a claim about the host. Reporting the second as the
+    first would tell an operator nothing has run when the truth is that nothing could
+    be asked.
+    """
+    _unreadable_store(monkeypatch, tmp_path, "empty.db")
+    result = runner.invoke(app, ["actions", "list"])
+
+    assert result.exit_code == 0
+    table = _listing(result.stdout)
+    assert set(table) == {job.name for job in registry.JOBS}
+    assert {row["rows"] for row in table.values()} == {"-"}
+
+
+def test_actions_list_survives_a_database_it_cannot_open(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A database path that cannot be opened at all raises from inside the query.
+
+    The other half of the same promise: the degradation is not keyed on one specific
+    failure, and neither is it `except OperationalError` reaching for the wrong one —
+    SQLite raises `OperationalError` for both a missing table and an unopenable file,
+    and a listing that only survived the first would have been fixed for the wrong
+    reason.
+    """
+    _unreadable_store(monkeypatch, tmp_path, "blocked.db")
+    result = runner.invoke(app, ["actions", "list"])
+
+    assert result.exit_code == 0
+    table = _listing(result.stdout)
+    assert set(table) == {job.name for job in registry.JOBS}
+    assert {row["rows"] for row in table.values()} == {"-"}
 
 
 def test_actions_list_shows_exactly_the_privileged_jobs_as_privileged() -> None:
