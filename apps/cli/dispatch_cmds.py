@@ -18,8 +18,16 @@ see, and there is only one thing to get right here, so it is worth stating plain
  ``4``  another run holds this job's lock
  ``5``  the action ran and failed, or was stopped for exceeding
         its timeout
+ ``64``  a usage error — an option `spectre run` does not have
+        (`sysexits.h`'s ``EX_USAGE``)
  ``1``  an unexpected exception — see below
 ======  ==========================================================
+
+``64`` sits outside that range on purpose. It is the code a refused option carries,
+and Click's own choice for it — 2 — is already spent on "no such job in the
+registry", so reusing it would make a typo and a missing job the same number. It is
+also the only code here that means *nothing ran and nothing was refused*, which is
+why it is stated here rather than left to Click.
 
 ``spectre actions verify`` has its own, much smaller contract, because it dispatches
 nothing and its exit code is a CI gate rather than a run result:
@@ -93,8 +101,10 @@ from __future__ import annotations
 import os
 from typing import Annotated
 
+import click
 import typer
 from sqlalchemy.exc import SQLAlchemyError
+from typer.core import TyperCommand
 
 from packages.dispatch import registry
 from packages.dispatch import verify as verify_mod
@@ -115,6 +125,12 @@ EXIT_UNKNOWN_JOB = 2
 EXIT_NOT_DISPATCHABLE = 3
 EXIT_LOCKED = 4
 EXIT_FAILED = 5
+# `sysexits.h`'s EX_USAGE, not one of Click's 0–5 codes. A usage error is a
+# different class of thing from a dispatch outcome — nothing ran and nothing was
+# refused — and reusing 2 would make "you typed it wrong" indistinguishable from
+# "that job does not exist". 64 is outside every code in the table above, so no
+# caller has to guess.
+EXIT_USAGE = 64
 
 # Recorded on every run dispatched from here, so a record can be told apart from a
 # cron dispatch or a systemd one by the column that already exists for it.
@@ -521,30 +537,91 @@ def run_action_job(job: Job, args: list[str]) -> None:
     raise typer.Exit(EXIT_OK)
 
 
+class _RunCommand(TyperCommand):
+    """`spectre run`'s parser: refuse an unknown option, and say how to forward it.
+
+    Click's own `NoSuchOption` already refuses it; what it does not do is tell the
+    operator that the flag belongs to the action, which is the entire reason they
+    typed it. Without this the refusal would read as "spectre has no such option,
+    give up" for a command that is one `--` away from working — and an operator who
+    concludes that is the one who drops `--` and gets the destructive path again,
+    with no banner this time.
+
+    `ctx.exit` rather than Click's own error handling so the exit code is one this
+    module documents. Click's is 2, which this module already spends on "no such
+    job in the registry"; `EXIT_USAGE` is `sysexits.h`'s `EX_USAGE` and is outside
+    every code in the dispatch table, so no caller has to disambiguate a usage error
+    from a dispatch outcome.
+    """
+
+    def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
+        try:
+            return super().parse_args(ctx, args)
+        except click.NoSuchOption as e:
+            typer.echo(f"no such option for spectre run: {e.option_name}")
+            typer.echo("  options for the action itself go after `--`, e.g.")
+            typer.echo(f"      spectre run <job> -- {e.option_name}")
+            ctx.exit(EXIT_USAGE)
+        except click.UsageError as e:
+            typer.echo(f"usage error: {e.format_message()}")
+            ctx.exit(EXIT_USAGE)
+
+
 def register(app: typer.Typer) -> None:
     """Attach `run` and the `actions` sub-app to `app`.
 
     `run` is defined here rather than as a module-level command so both live in one
-    place for a reader looking for the dispatch surface, and so `main.py` stays a
+    place for a reader looking at the dispatch surface, and so `main.py` stays a
     registration call rather than a command.
 
-    The `context_settings` are what make `spectre run <job> -- --flag` work:
-    `allow_extra_args` collects what follows the job, and `ignore_unknown_options`
-    stops Click from trying to parse an action's own flags as spectre's. Without
-    them `spectre run backups/backup-all --dry-run` would fail on an option spectre
-    does not have, which is the common case — the flags belong to the action.
+    **Arguments go after `--`, and an unrecognised option is refused rather than
+    forwarded.** `allow_extra_args` collects what follows the job, and the absence
+    of `ignore_unknown_options` is the load-bearing half: with it set, Click parsed
+    an action's own flags as spectre's own and everything was well meant — until it
+    was not. 45 of the 61 jobs mutate and 21 need root, and an operator's reflex
+    before a destructive action is exactly the flag typed without checking whether
+    the tool has it. `spectre run maintenance/cleanup-cache --dry-run` therefore ran
+    the destructive path and reported `success`:
+
+        ARGV: --dry-run
+        I am the cleanup cache script and I would now delete things.
+        maintenance/cleanup-cache: success in 2ms (exit 0)
+
+    So the option is refused, and `_RunCommand` says how to forward it. This is
+    the convention `git`, `docker` and `kubectl` all use, and it is unambiguous in
+    one direction only: spectre has no `--dry-run` of its own today, so `--` never
+    shadows a spectre flag — and if one is added later, this is the change that has
+    to be revisited with it.
+
+    No confirmation prompt for `mutates=true` jobs, deliberately. The design spec
+    §"Manual-run approval" says `sudo` and `mutates` are "recorded and badged",
+    not confirmed, and whether a destructive action should be gated on a prompt is a
+    product decision this branch has no mandate to make. Carried as a Plan 2/3
+    question.
     """
 
-    @app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+    @app.command(
+        cls=_RunCommand,
+        context_settings={"allow_extra_args": True},
+    )
     def run(
         job: str,
         args: Annotated[list[str] | None, typer.Argument()] = None,
     ) -> None:
         """Run one registered job and record the run.
 
-        Exit 0 success, 2 unknown job, 3 not dispatchable (including a job that
-        needs root and did not get it), 4 lock held, 5 failed or timed out, 1 for an
-        unexpected error such as a run record that could not be written.
+        Arguments for the action itself go after `--`:
+
+            spectre run backups/backup-all -- --dry-run
+
+        An option spectre does not recognise is refused with exit 64 rather than
+        passed to the action, so a flag meant for spectre cannot run as the action's
+        by accident.
+
+        Exit 0 success, 2 unknown job, 3 not dispatchable (including a job that needs
+        root and did not get it), 4 lock held, 5 failed or timed out, 64 a usage
+        error such as an unrecognised option, 1 for an unexpected error such as a
+        run record that could not be written.
         """
         run_action_job(_job_lookup(job), list(args or []))
 
