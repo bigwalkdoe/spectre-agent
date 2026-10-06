@@ -142,6 +142,32 @@ def test_a_missing_action_is_a_finding(tmp_path: Path, registry: pytest.MonkeyPa
     assert "not-executable" not in _codes(verify(HostInventory([], [])))
 
 
+def test_a_directory_named_like_an_action_is_reported_not_parsed(tmp_path: Path, registry: pytest.MonkeyPatch) -> None:
+    """A directory passes both existence and the executable bit, and is neither.
+
+    `os.access(X_OK)` on a directory answers "may be traversed", so a directory
+    named `t/alpha.sh` satisfied both guards and was handed to `bash -n`, which
+    exited 126 — reported as `syntax`, i.e. "this script is broken", about something
+    that is not a script at all. `spectre run` refuses the same path, so a preflight
+    that passed it was answering "would this run?" with a yes it cannot mean.
+
+    `missing` is the honest code: the action root holds scripts, and this is not one
+    of them. The two facts that must not both appear are `syntax` (a claim about
+    code) and `unregistered` (a claim about the registry).
+    """
+    root = _root(tmp_path, registry)
+    (root / "t").mkdir()
+    (root / "t" / "alpha.sh").mkdir()
+    registry.setattr(verify_mod.registry, "JOBS", [_ALPHA])
+
+    codes = _codes(verify(HostInventory([], [])))
+
+    assert codes == ["missing"]
+    findings = [f for f in verify(HostInventory([], [])) if f.code == "missing"]
+    assert "not a file" in findings[0].detail
+    assert str(root / "t" / "alpha.sh") in findings[0].detail
+
+
 def test_a_non_executable_action_is_a_finding(tmp_path: Path, registry: pytest.MonkeyPatch) -> None:
     """Executable, not merely present — a 0o644 script is what a git checkout or a
     `cp` without `-p` leaves behind, and `spectre run` refuses it too."""

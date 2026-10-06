@@ -208,3 +208,46 @@ def test_provenance_is_empty_in_a_repository_with_no_commits(tmp_path: Path, mon
     monkeypatch.setenv("SPECTRE_ACTIONS_ROOT", str(root))
     got = resolve(make_job())
     assert (got.git_commit, got.git_dirty) == ("", False)
+
+
+def test_a_directory_named_like_a_script_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Present, and executable — and not a program.
+
+    Every directory on the host passes `os.access(X_OK)`, because that bit means
+    "may be traversed" rather than "is a program", so a directory named
+    `cleanup.sh` satisfied both of the guards above this one and reached `Popen`,
+    which failed with exit 126. The dispatcher reported a failed run for something
+    that never ran: a run record claiming an action executed, when what happened
+    was the kernel declining to execute a directory.
+
+    Without this check the failure surfaces as exit 5 (`Status.FAILED`) rather than
+    exit 3, so the run history reads as "this job broke" instead of "this job is
+    not dispatchable" — and it reads that way about the script, not about the
+    registry entry that points at a directory.
+    """
+    root = tmp_path / "actions"
+    (root / "ok.sh").mkdir(parents=True)
+    monkeypatch.setenv("SPECTRE_ACTIONS_ROOT", str(root))
+
+    with pytest.raises(DispatchError, match="action is not a file"):
+        resolve(make_job())
+
+
+def test_an_action_holding_a_nul_is_a_dispatch_error_not_a_value_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A registry value is data, and unusable data gets the documented exit code.
+
+    `Path.resolve` raises `ValueError: embedded null character in path` from the C
+    layer, which reached the caller as a traceback rather than the `DispatchError`
+    carrying exit 3 — the one code that means "registered but not dispatchable". A
+    NUL cannot survive JSON in any useful registry, but the point is not that this
+    one cannot arrive; it is that every other malformed `action` already raises
+    `DispatchError`, and this one was the exception that made the contract untrue.
+    """
+    root = tmp_path / "actions"
+    root.mkdir()
+    monkeypatch.setenv("SPECTRE_ACTIONS_ROOT", str(root))
+
+    with pytest.raises(DispatchError, match="unusable action path"):
+        resolve(make_job("ok\x00.sh"))
