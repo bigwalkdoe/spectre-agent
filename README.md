@@ -28,7 +28,7 @@ Spectre monitors, maintains, secures, and manages your Linux workstation through
 
 ```bash
 # Clone the repository
-git clone https://github.com/bigwalkdoe/spectre-system-maintenance-agent.git
+git clone https://github.com/bigwalkdoe/spectre-agent.git
 cd spectre
 
 # Install in development mode
@@ -256,7 +256,7 @@ and fails fast if it is absent; the systemd user unit reads it from
 ### `GET /api/security/summary` — monitoring contract
 
 This endpoint has an external consumer, so its shape is a contract rather than
-an implementation detail. `spectre-system-maintenance-suite` polls it and
+an implementation detail. `spectre-suite` polls it and
 republishes the response as Prometheus metrics; do not reshape it without
 updating that exporter.
 
