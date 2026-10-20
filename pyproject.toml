@@ -28,7 +28,10 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Application Frameworks",
 ]
 dependencies = [
-    "typer>=0.12.0",
+    # Typer 0.26+ vendors Click, so `_RunCommand.parse_args` in
+    # apps/cli/dispatch_cmds.py no longer catches the vendored NoSuchOption.
+    # Lift this pin once that command is ported to the vendored API.
+    "typer>=0.12.0,<0.26",
     "rich>=14.2.0",
     "pydantic>=2.7.0",
     "sqlmodel>=0.0.19",

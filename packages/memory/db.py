@@ -563,11 +563,11 @@ def get_security_incidents(
 
 
 def _as_utc(value: datetime | None) -> datetime | None:
-    """Re-attach UTC to a timestamp read back from SQLite.
+    """Normalize a timestamp read back from SQLite to aware UTC.
 
-    SQLite has no timezone-aware datetime type, so every timestamp comes back
-    naive even though it was written as an aware UTC value. A monitoring consumer
-    that parses this and compares it with an aware `now()` gets
+    SQLite has no timezone-aware datetime type. Depending on the SQLModel version,
+    a stored UTC value comes back either naive or already tagged UTC. A monitoring
+    consumer that compares a naive value with an aware `now()` gets
     "can't subtract offset-naive and offset-aware datetimes", so the timezone is
     restored here rather than left for every caller to rediscover.
     """

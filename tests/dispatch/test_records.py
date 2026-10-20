@@ -102,6 +102,16 @@ def _env(
     )
 
 
+def _aware_utc(value: datetime) -> datetime:
+    """The instant `value` names, with UTC attached if SQLite returned it naive.
+
+    SQLModel 0.0.48 returns timestamps as aware UTC; older versions returned them
+    naive. These tests care that the first-seen instant survives, not which of the
+    two the installed SQLModel happens to produce.
+    """
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
 def _pre_migration_db(db: Path) -> Path:
     """Build the seven-column `maintenancerecord` a host has today.
 
@@ -681,7 +691,7 @@ def test_a_repeating_finding_keeps_one_row_and_its_first_seen_time() -> None:
     assert len(rows) == 1
     assert rows[0].message == "9 days"
     assert rows[0].severity == "high"
-    assert rows[0].timestamp == first_seen.replace(tzinfo=None)
+    assert _aware_utc(rows[0].timestamp) == first_seen
 
     save_run(
         _env(
@@ -697,7 +707,7 @@ def test_a_repeating_finding_keeps_one_row_and_its_first_seen_time() -> None:
     assert rows[0].message == "12 days"
     assert rows[0].severity == "medium"
     # ...while the age the summary publishes stays the age of the condition.
-    assert rows[0].timestamp == first_seen.replace(tzinfo=None), "first-seen time was refreshed"
+    assert _aware_utc(rows[0].timestamp) == first_seen, "first-seen time was refreshed"
 
 
 def test_first_seen_survives_many_re_observations() -> None:
@@ -727,7 +737,7 @@ def test_first_seen_survives_many_re_observations() -> None:
     rows = _incidents("chronic")
     assert len(rows) == 1
     assert rows[0].message == "14 days", "the latest detail should win"
-    assert rows[0].timestamp == first_seen.replace(tzinfo=None)
+    assert _aware_utc(rows[0].timestamp) == first_seen
 
 
 def test_a_reoccurrence_after_resolution_opens_a_fresh_row() -> None:
