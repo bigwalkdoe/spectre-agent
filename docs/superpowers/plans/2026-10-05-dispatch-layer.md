@@ -8,11 +8,11 @@
 
 **Tech Stack:** Python 3.11+, Typer, Rich, SQLModel/SQLite, structlog, pytest, ruff, mypy.
 
-**Spec:** `spectre-system-maintenance-suite/docs/superpowers/specs/2026-10-05-spectre-consolidation-design.md` — sections 5 (dispatch layer), 6 (contract and run records), 10 (failure modes). Plans 2 and 3 implement spec sections 4, 7, 8, 9 and are not in scope here.
+**Spec:** `spectre-suite/docs/superpowers/specs/2026-10-05-spectre-consolidation-design.md` — sections 5 (dispatch layer), 6 (contract and run records), 10 (failure modes). Plans 2 and 3 implement spec sections 4, 7, 8, 9 and are not in scope here.
 
 ## Global Constraints
 
-- Every repository is `spectre-system-maintenance-agent`. **This plan does not modify the suite repo** — it only reads it.
+- Every repository is `spectre-agent`. **This plan does not modify the suite repo** — it only reads it.
 - `mypy` runs with `disallow_untyped_defs = true`. Every `def` in this plan is fully annotated, including tests.
 - `ruff` line-length is 120, target `py311`, rules `E,F,I,B,UP`.
 - `pytest` `testpaths = ["tests"]`, `asyncio_mode = "auto"`. Baseline on `main` is **324 passed**.
@@ -129,7 +129,7 @@ Defaults applied at load time when a JSON entry omits a key: `sudo=False`, `time
 - [ ] **Step 4: Generate `registry_data.json` from the suite tree**
 
 One-off, not a runtime scan. Enumerate `.sh` files under
-`../spectre-system-maintenance-suite/scripts/`, skipping `systemd/label-exec-context.sh`.
+`../spectre-suite/scripts/`, skipping `systemd/label-exec-context.sh`.
 Job name is the path relative to `scripts/` minus `.sh`. Group is the first path
 segment, except that top-level scripts use their filename stem as the group.
 
@@ -1202,7 +1202,7 @@ Expected: PASS
 - [ ] **Step 6: Run against the real host and record the baseline**
 
 ```bash
-SPECTRE_ACTIONS_ROOT=../spectre-system-maintenance-suite/scripts \
+SPECTRE_ACTIONS_ROOT=../spectre-suite/scripts \
   /usr/bin/python3 -m apps.cli.main actions verify
 ```
 

@@ -57,11 +57,11 @@ dev = [
   ]
 
 [project.urls]
-Homepage = "https://github.com/bigwalkdoe/spectre-system-maintenance-agent"
-Documentation = "https://github.com/bigwalkdoe/spectre-system-maintenance-agent/tree/main/docs"
-Repository = "https://github.com/bigwalkdoe/spectre-system-maintenance-agent"
-Issues = "https://github.com/bigwalkdoe/spectre-system-maintenance-agent/issues"
-Changelog = "https://github.com/bigwalkdoe/spectre-system-maintenance-agent/releases"
+Homepage = "https://github.com/bigwalkdoe/spectre-agent"
+Documentation = "https://github.com/bigwalkdoe/spectre-agent/tree/main/docs"
+Repository = "https://github.com/bigwalkdoe/spectre-agent"
+Issues = "https://github.com/bigwalkdoe/spectre-agent/issues"
+Changelog = "https://github.com/bigwalkdoe/spectre-agent/releases"
 
 [project.scripts]
 spectre = "apps.cli.main:main"
