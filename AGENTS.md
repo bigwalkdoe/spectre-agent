@@ -15,7 +15,7 @@ Spectre is an autonomous AI Engineering Operating System for Fedora Linux. It mo
 ## Structure
 
 ```
-spectre/
+spectre-agent/
 ├── AGENTS.md                    # This file
 ├── README.md                    # Overview and usage
 ├── LICENSE                      # MIT License
@@ -66,7 +66,7 @@ select the bind address. `8000` is heavily contested on a workstation, so
 `scripts/spectre-api.service` requires both to be set explicitly instead of
 defaulting — a silent bind onto an occupied port serves another application's
 `404` and gets misread as the agent being down. The monitoring consumer
-(`spectre-system-maintenance-suite`) reads `SPECTRE_AGENT_URL` and expects these
+(`spectre-suite`) reads `SPECTRE_AGENT_URL` and expects these
 to agree with it.
 
 `/api/security/summary` is a **published contract**: the maintenance suite scrapes

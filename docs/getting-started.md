@@ -7,8 +7,8 @@ Spectre is an autonomous system maintenance and operations platform for Fedora L
 ## Quick Install
 
 ```bash
-git clone https://github.com/deon/spectre.git
-cd spectre
+git clone https://github.com/bigwalkdoe/spectre-agent.git
+cd spectre-agent
 bash scripts/install.sh
 ```
 

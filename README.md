@@ -29,7 +29,7 @@ Spectre monitors, maintains, secures, and manages your Linux workstation through
 ```bash
 # Clone the repository
 git clone https://github.com/bigwalkdoe/spectre-agent.git
-cd spectre
+cd spectre-agent
 
 # Install in development mode
 pip install -e ".[dev]"

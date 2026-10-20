@@ -8,7 +8,7 @@ the hermetic test suite must never touch. Drift between this script and the
 committed JSON is caught by `spectre actions verify` (Plan 3), which takes an
 injectable host inventory.
 
-    SPECTRE_SUITE_ROOT=/path/to/spectre-system-maintenance-suite \
+    SPECTRE_SUITE_ROOT=/path/to/spectre-suite \
       /usr/bin/python3 tools/gen_registry.py
 
 Writes exactly one file, next to this script's repository. Reads the suite tree
@@ -33,7 +33,7 @@ if str(REPO_ROOT) not in sys.path:
 # default there changes what this script omits.
 from packages.dispatch.registry import FIELD_DEFAULTS, REQUIRED_FIELDS  # noqa: E402
 
-SUITE_ROOT = Path(os.environ.get("SPECTRE_SUITE_ROOT", "/home/deon/dev/github/spectre-system-maintenance-suite"))
+SUITE_ROOT = Path(os.environ.get("SPECTRE_SUITE_ROOT", "/home/deon/dev/github/spectre-suite"))
 SCRIPTS = SUITE_ROOT / "scripts"
 
 # The label-exec-context helper is a systemd glue script, not a dispatchable job.
