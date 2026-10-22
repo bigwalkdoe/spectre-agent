@@ -11,11 +11,12 @@ Type=simple
 # port collision must fail loudly at start rather than silently bind somewhere
 # a monitoring scraper will mistake for the agent.
 #
-# apps.api.main must be importable, i.e. the package installed first:
-#   pip install -e ".[dev]"
+# The interpreter and the package come from the venv install.sh creates
+# (%h/.config/spectre/venv). A missing venv fails the exec loudly instead of
+# falling back to a system python that cannot import apps.api.main.
 # WorkingDirectory only has to be writable for nothing in particular here; it
 # matches spectre.service so both units read state from the same place.
-ExecStart=/usr/bin/python3 -m uvicorn apps.api.main:app --host ${SPECTRE_API_HOST} --port ${SPECTRE_API_PORT} --proxy-headers
+ExecStart=%h/.config/spectre/venv/bin/python -m uvicorn apps.api.main:app --host ${SPECTRE_API_HOST} --port ${SPECTRE_API_PORT} --proxy-headers
 WorkingDirectory=%h/.config/spectre
 
 # SPECTRE_API_KEY is mandatory. An unset key makes the API return 503 on every
