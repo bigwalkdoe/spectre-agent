@@ -39,9 +39,7 @@ def _exec_start(name: str) -> str:
     packages/dispatch/verify.py:265 — real hosts may have them, shipped files
     once."""
     starts = [
-        line[len("ExecStart=") :].strip()
-        for line in _unit_text(name).splitlines()
-        if line.startswith("ExecStart=")
+        line[len("ExecStart=") :].strip() for line in _unit_text(name).splitlines() if line.startswith("ExecStart=")
     ]
     assert len(starts) == 1, f"{name} has {len(starts)} ExecStart lines"
     return starts[0]
@@ -71,7 +69,4 @@ def test_api_environment_file_is_required() -> None:
     """`EnvironmentFile=` without the `-` prefix fails the unit when the file
     is absent, which is the point: an unset key makes the API refuse to serve
     (AGENTS.md), so starting without the file must fail, not half-work."""
-    assert (
-        "EnvironmentFile=%h/.config/spectre/spectre.env"
-        in _unit_text("spectre-api.service")
-    )
+    assert "EnvironmentFile=%h/.config/spectre/spectre.env" in _unit_text("spectre-api.service")
