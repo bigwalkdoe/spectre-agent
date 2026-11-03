@@ -1,0 +1,57 @@
+name: Authorship / Solo-Developer Policy
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check-authorship:
+    name: No co-authors or AI attribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify commit authors and messages
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            range="origin/${{ github.base_ref }}..HEAD"
+          else
+            before="${{ github.event.before }}"
+            if [ -z "$before" ] || [ "$before" = "0000000000000000000000000000000000000000" ]; then
+              range="HEAD"
+            else
+              range="${before}..${{ github.sha }}"
+            fi
+          fi
+
+          bad=0
+          # Authors must all be bigwalkdoe
+          while IFS= read -r author; do
+            [ -z "$author" ] && continue
+            if [ "$author" != "bigwalkdoe <bigwalkdoe@gmail.com>" ]; then
+              echo "Forbidden author: $author"
+              bad=1
+            fi
+          done < <(git log --format='%an <%ae>' "$range")
+
+          # No co-author or AI attribution trailers in messages
+          if git log --format='%B' "$range" | grep -iEq 'Co-Authored-By:|Generated (with|by) (Devin|Claude|Cursor|Copilot|opencode|ChatGPT)'; then
+            echo "Forbidden co-author/AI attribution found in commit messages:"
+            git log --format='%H %s' "$range" | while read -r sha subj; do
+              if git log -1 --format='%B' "$sha" | grep -iEq 'Co-Authored-By:|Generated (with|by) (Devin|Claude|Cursor|Copilot|opencode|ChatGPT)'; then
+                echo "  $sha $subj"
+              fi
+            done
+            bad=1
+          fi
+
+          if [ "$bad" -ne 0 ]; then
+            exit 1
+          fi
+          echo "Authorship policy OK"

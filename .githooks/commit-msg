@@ -1,0 +1,13 @@
+#!/bin/sh
+# Enforce the solo-developer policy: bigwalkdoe is the sole author/committer.
+# Reject commits that credit other humans, bots, or AI tools.
+msg_file="$1"
+if grep -iEq 'Co-Authored-By:' "$msg_file"; then
+    echo "ERROR: Co-Authored-By trailers are not allowed (solo developer policy)." >&2
+    exit 1
+fi
+if grep -iEq 'Generated (with|by) (Devin|Claude|Cursor|Copilot|opencode|ChatGPT)' "$msg_file"; then
+    echo "ERROR: AI tool attribution is not allowed (solo developer policy)." >&2
+    exit 1
+fi
+exit 0
