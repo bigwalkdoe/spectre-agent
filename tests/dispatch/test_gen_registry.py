@@ -20,8 +20,8 @@ from typing import Any
 
 import pytest
 
-from packages.dispatch import registry
-from packages.dispatch.registry import FIELD_DEFAULTS, REQUIRED_FIELDS
+from spectre.dispatch import registry
+from spectre.dispatch.registry import FIELD_DEFAULTS, REQUIRED_FIELDS
 from tools import gen_registry
 
 SCRIPTS = [

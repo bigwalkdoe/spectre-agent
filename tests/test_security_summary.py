@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from packages.memory.db import (
+from spectre.memory.db import (
     MaintenanceRecord,
     SecurityIncident,
     get_security_incidents,
@@ -28,7 +28,7 @@ def _clear() -> None:
     """Start from an empty slate; the suite shares one database."""
     from sqlmodel import Session, select
 
-    from packages.memory.db import engine
+    from spectre.memory.db import engine
 
     with Session(engine) as session:
         for incident in session.exec(select(SecurityIncident)).all():

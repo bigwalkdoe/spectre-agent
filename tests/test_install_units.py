@@ -2,11 +2,11 @@
 
 `scripts/install.sh` installs the package into `%h/.config/spectre/venv` and
 never touches the system python, so `ExecStart=/usr/bin/python3 ...` cannot
-import `apps` on a clean host — the workflow engine, sqlmodel, typer and every
+import `spectre` on a clean host — the workflow engine, sqlmodel, typer and every
 other dependency live only in the venv. Units like that degrade silently on a
 machine where an older system-wide install left the imports resolvable and fail
 loudly on one where it does not; this host produced the second half
-(`ModuleNotFoundError: No module named 'apps'`) and a hand-patched copy of
+(`ModuleNotFoundError: No module named 'spectre'`) and a hand-patched copy of
 `~/.config/systemd/user/spectre.service` masked the cause.
 
 The pins here are structural, not "start the unit and assert it runs": starting
@@ -36,7 +36,7 @@ def _unit_text(name: str) -> str:
 def _exec_start(name: str) -> str:
     """The one ExecStart line, prefix stripped. Drop-in overrides are out of
     scope for the same reason verify.py gives at
-    packages/dispatch/verify.py:265 — real hosts may have them, shipped files
+    spectre/dispatch/verify.py:265 — real hosts may have them, shipped files
     once."""
     starts = [
         line[len("ExecStart=") :].strip() for line in _unit_text(name).splitlines() if line.startswith("ExecStart=")

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from packages.memory.db import (
+from spectre.memory.db import (
     Configuration,
     Decision,
     KVStore,

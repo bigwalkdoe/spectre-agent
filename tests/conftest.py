@@ -18,22 +18,22 @@ from typing import Any
 import pytest
 
 # Point Spectre state at a throwaway tree. This has to happen before anything
-# imports packages.memory.db, because the database path is resolved at import
+# imports spectre.memory.db, because the database path is resolved at import
 # time.
 _TMP_CONFIG = Path(tempfile.mkdtemp(prefix="spectre-tests-"))
 os.environ["SPECTRE_CONFIG_DIR"] = str(_TMP_CONFIG)
 os.environ["SPECTRE_SCAN_ROOT"] = str(_TMP_CONFIG)
 
-from packages.memory.db import init_db  # noqa: E402
+from spectre.memory.db import init_db  # noqa: E402
 
 # Modules that shell out to dnf, flatpak, journalctl, podman, docker, kubectl,
 # git and friends.
 _SUBPROCESS_CONSUMERS = (
-    "packages.linux_agent.agent",
-    "packages.devops_agent.agent",
-    "packages.security_agent.agent",
-    "packages.developer_agent.agent",
-    "packages.publishing_agent.agent",
+    "spectre.agents.linux.agent",
+    "spectre.agents.devops.agent",
+    "spectre.agents.security.agent",
+    "spectre.agents.developer.agent",
+    "spectre.agents.publishing.agent",
 )
 
 

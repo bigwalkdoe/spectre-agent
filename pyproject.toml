@@ -67,7 +67,7 @@ Issues = "https://github.com/bigwalkdoe/spectre-agent/issues"
 Changelog = "https://github.com/bigwalkdoe/spectre-agent/releases"
 
 [project.scripts]
-spectre = "apps.cli.main:main"
+spectre = "spectre.cli.main:main"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -75,7 +75,7 @@ testpaths = ["tests"]
 addopts = "-v --tb=short"
 
 [tool.hatch.build.targets.wheel]
-packages = ["apps", "packages"]
+packages = ["spectre"]
 
 [tool.ruff]
 line-length = 120

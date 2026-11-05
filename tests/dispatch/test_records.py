@@ -17,7 +17,7 @@ create, that it leaves the rows already there alone — every value, not merely 
 count — and that running it again changes nothing at all.
 
 Nothing here touches the live database. `tests/conftest.py` has already pointed
-`SPECTRE_CONFIG_DIR` at a throwaway tree before `packages.memory.db` was imported, and
+`SPECTRE_CONFIG_DIR` at a throwaway tree before `spectre.memory.db` was imported, and
 the migration tests build their own databases under `tmp_path`.
 """
 
@@ -36,9 +36,9 @@ from typing import Any
 import pytest
 from sqlmodel import Session, select
 
-from packages.dispatch.envelope import Envelope, Status
-from packages.memory import db as db_module
-from packages.memory.db import (
+from spectre.dispatch.envelope import Envelope, Status
+from spectre.memory import db as db_module
+from spectre.memory.db import (
     SecurityIncident,
     ensure_schema,
     get_security_incidents,

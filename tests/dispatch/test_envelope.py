@@ -19,7 +19,7 @@ from typing import Any
 
 import pytest
 
-from packages.dispatch.envelope import (
+from spectre.dispatch.envelope import (
     OUTPUT_LIMIT,
     PAYLOAD_LIMIT,
     Envelope,
@@ -29,7 +29,7 @@ from packages.dispatch.envelope import (
     status_for_exit_code,
     truncate_output,
 )
-from packages.dispatch.resolve import ResolvedAction
+from spectre.dispatch.resolve import ResolvedAction
 from tests.dispatch.conftest import make_job
 
 _STARTED = datetime(2026, 10, 5, 3, 0, tzinfo=UTC)

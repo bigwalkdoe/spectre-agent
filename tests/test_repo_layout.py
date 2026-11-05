@@ -13,7 +13,7 @@ the path, so the names are unique by construction rather than by luck. That is
 what this file pins.
 
 The check is deliberately structural rather than "run mypy and assert it passes".
-A faithful `mypy packages apps tests tools` takes ~2 minutes from a cold cache,
+A faithful `mypy spectre spectre tests tools` takes ~2 minutes from a cold cache,
 which is too slow to put in the suite; and the cheap approximations do not work —
 `--follow-imports=skip` drops the `tests.dispatch.conftest` import that is half of
 the collision, so it cannot see the clash at all. The structural rule is instant
@@ -28,7 +28,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # The trees mypy is asked to check.
-TYPED_TREES = ("packages", "apps", "tests", "tools")
+TYPED_TREES = ("spectre", "spectre", "tests", "tools")
 
 
 def _source_dirs(tree: str) -> list[Path]:

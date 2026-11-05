@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator
 import httpx
 import pytest
 
-from apps.api.main import app
+from spectre.api.main import app
 
 TEST_API_KEY = "test-api-key-not-a-real-secret"
 

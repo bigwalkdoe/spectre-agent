@@ -8,10 +8,10 @@ from typing import Any
 
 import pytest
 
-from packages.core.agent import AgentContext, BaseAgent
-from packages.core.config import SpectreConfig, load_config, save_config
-from packages.core.kernel import Container, Kernel
-from packages.core.service_bus import ServiceBus
+from spectre.core.agent import AgentContext, BaseAgent
+from spectre.core.config import SpectreConfig, load_config, save_config
+from spectre.core.kernel import Container, Kernel
+from spectre.core.service_bus import ServiceBus
 
 # ── Container ─────────────────────────────────────────────────────────────
 

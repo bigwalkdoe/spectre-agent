@@ -8,7 +8,7 @@ Type=simple
 # apps must be importable from the interpreter install.sh creates
 # (%h/.config/spectre/venv); the system python has none of this project's
 # dependencies.
-ExecStart=%h/.config/spectre/venv/bin/python -m apps.daemon.main
+ExecStart=%h/.config/spectre/venv/bin/python -m spectre.daemon.main
 WorkingDirectory=%h/.config/spectre
 Restart=on-failure
 RestartSec=30

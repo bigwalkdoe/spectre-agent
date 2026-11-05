@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Regenerate `packages/dispatch/registry_data.json` from the maintenance suite.
+"""Regenerate `spectre/dispatch/registry_data.json` from the maintenance suite.
 
 One-off tooling, committed so the registry can be regenerated and diffed against
 the suite tree. Regeneration is a MANUAL verification step, deliberately not a
@@ -24,14 +24,14 @@ from pathlib import Path
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-OUT = REPO_ROOT / "packages" / "dispatch" / "registry_data.json"
+OUT = REPO_ROOT / "spectre" / "dispatch" / "registry_data.json"
 
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 # Imported, never mirrored: the entry schema lives in one place, so changing a
 # default there changes what this script omits.
-from packages.dispatch.registry import FIELD_DEFAULTS, REQUIRED_FIELDS  # noqa: E402
+from spectre.dispatch.registry import FIELD_DEFAULTS, REQUIRED_FIELDS  # noqa: E402
 
 SUITE_ROOT = Path(os.environ.get("SPECTRE_SUITE_ROOT", "/home/deon/dev/github/spectre-suite"))
 SCRIPTS = SUITE_ROOT / "scripts"

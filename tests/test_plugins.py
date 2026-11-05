@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from packages.plugins.loader import BasePlugin, PluginLoader
+from spectre.plugins.loader import BasePlugin, PluginLoader
 
 
 def test_plugin_loader_default_dir() -> None:
@@ -31,7 +31,7 @@ def test_load_plugins_nonexistent_dir() -> None:
 
 def test_load_plugins_with_valid_plugin(tmp_path: Path) -> None:
     plugin_code = """
-from packages.plugins.loader import BasePlugin
+from spectre.plugins.loader import BasePlugin
 
 class MyPlugin(BasePlugin):
     def register_commands(self):

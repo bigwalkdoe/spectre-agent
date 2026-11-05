@@ -39,8 +39,8 @@ from pathlib import Path
 
 import pytest
 
-import packages.dispatch.verify as verify_mod
-from packages.dispatch.verify import HostInventory, verify
+import spectre.dispatch.verify as verify_mod
+from spectre.dispatch.verify import HostInventory, verify
 from tests.dispatch.conftest import make_job
 
 # The real implementation, captured before the guard fixture replaces it. Only the
@@ -699,7 +699,7 @@ def test_a_command_without_a_script_path_is_ignored(tmp_path: Path, registry: py
     _write(root, _ALPHA.action)
     registry.setattr(verify_mod.registry, "JOBS", [_ALPHA])
     inventory = HostInventory(
-        [("0 1 * * *", "/usr/bin/python3 -m apps.daemon.main")],
+        [("0 1 * * *", "/usr/bin/python3 -m spectre.daemon.main")],
         [("daemon.service", 'ExecStart=/usr/share/code/bin/code-tunnel "--verbose" tunnel service')],
     )
 
@@ -727,7 +727,7 @@ def test_ordinary_unit_words_are_not_read_as_unresolvable_script_paths(
             ("dbus.service", "ExecStart=/usr/bin/dbus-daemon --system --nofork $DBUS_ARGS"),
             ("gateway.service", "ExecStart=/usr/bin/hermes gateway run"),
             ("wg-quick@.service", "ExecStart=/usr/bin/wg-quick %i up"),
-            ("api.service", "ExecStart=/usr/bin/python3 -m uvicorn apps.api.main:app --port 8106"),
+            ("api.service", "ExecStart=/usr/bin/python3 -m uvicorn spectre.api.main:app --port 8106"),
         ],
     )
 

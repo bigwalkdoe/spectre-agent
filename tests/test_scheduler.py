@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from datetime import UTC, datetime
 
-from packages.core.scheduler import (
+from spectre.core.scheduler import (
     TaskScheduler,
     cron_matches,
     is_due,

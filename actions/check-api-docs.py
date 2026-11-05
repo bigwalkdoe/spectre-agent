@@ -40,7 +40,7 @@ def read(rel: str) -> str:
 
 
 # --- API routes -------------------------------------------------------------
-api_src = read("apps/api/main.py")
+api_src = read("spectre/api/main.py")
 routes = [(m.group(1).upper(), m.group(2)) for m in ROUTE_RE.finditer(api_src)]
 
 
@@ -73,7 +73,7 @@ for doc in DOCS:
                 )
 
 # --- CLI command count ------------------------------------------------------
-cli_src = read("apps/cli/main.py")
+cli_src = read("spectre/cli/main.py")
 cli_names = set()
 for m in CLI_CMD_RE.finditer(cli_src):
     explicit, named, func = m.groups()
@@ -88,7 +88,7 @@ for m in re.finditer(r"(\d+)\s+CLI [Cc]ommands", docs_text):
         )
 
 # --- Built-in workflows -----------------------------------------------------
-engine_src = read("packages/workflow_engine/engine.py")
+engine_src = read("spectre/workflow_engine/engine.py")
 workflows = set(WORKFLOW_RE.findall(engine_src))
 documented_workflows = set(
     re.findall(r"^- `([a-z-]+)` — ", docs_text, re.M)

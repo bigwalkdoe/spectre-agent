@@ -25,7 +25,7 @@ Hermeticity: `SPECTRE_ACTIONS_ROOT` points at a per-test `tmp_path` holding only
 the scripts written here, and `SPECTRE_CONFIG_DIR` at a per-test directory so
 lock files never touch a real tree or each other. The run records go to the
 session-wide throwaway database `tests/conftest.py` installed before
-`packages.memory.db` was imported. Nothing here reaches the host's own actions,
+`spectre.memory.db` was imported. Nothing here reaches the host's own actions,
 crontab, systemd or `~/.config/spectre`.
 """
 
@@ -45,8 +45,8 @@ import pytest
 from sqlmodel import Session, SQLModel, create_engine
 from typer.testing import CliRunner
 
-import apps.cli.dispatch_cmds as dispatch_cmds
-from apps.cli.dispatch_cmds import (
+import spectre.cli.dispatch_cmds as dispatch_cmds
+from spectre.cli.dispatch_cmds import (
     EXIT_FAILED,
     EXIT_LOCKED,
     EXIT_NOT_DISPATCHABLE,
@@ -54,11 +54,11 @@ from apps.cli.dispatch_cmds import (
     EXIT_UNKNOWN_JOB,
     EXIT_USAGE,
 )
-from apps.cli.main import app
-from packages.dispatch import registry, retention
-from packages.dispatch.lock import lock_path
-from packages.dispatch.verify import ALL_CODES, HostInventory
-from packages.memory.db import MaintenanceRecord, recent_runs
+from spectre.cli.main import app
+from spectre.dispatch import registry, retention
+from spectre.dispatch.lock import lock_path
+from spectre.dispatch.verify import ALL_CODES, HostInventory
+from spectre.memory.db import MaintenanceRecord, recent_runs
 
 runner = CliRunner()
 
@@ -354,7 +354,7 @@ def test_run_records_into_a_database_that_did_not_exist(
     """
     from sqlmodel import Session, create_engine, select
 
-    from packages.memory import db as db_module
+    from spectre.memory import db as db_module
 
     fresh = tmp_path / "fresh-config" / "memory.db"
     fresh.parent.mkdir(parents=True)
@@ -1151,7 +1151,7 @@ def test_actions_verify_says_so_when_it_could_not_read_the_host(actions: Path, m
 
 
 def test_python_m_actions_verify_exits_1_when_a_finding_is_blocking(actions: Path, tmp_path: Path) -> None:
-    """`python -m apps.cli.main actions verify` must be able to fail.
+    """`python -m spectre.cli.main actions verify` must be able to fail.
 
     Every other test here goes through Click's `CliRunner`, which calls the Typer
     app directly and therefore never touches `__main__`. That path is the one that
@@ -1166,7 +1166,7 @@ def test_python_m_actions_verify_exits_1_when_a_finding_is_blocking(actions: Pat
     fail. `SPECTRE_ACTIONS_ROOT` and `SPECTRE_CONFIG_DIR` are set in the child's
     environment rather than through `monkeypatch`, because a subprocess does not
     inherit the parent's monkeypatching — and the config dir matters, since
-    `packages.memory.db` resolves `DB_FILE` at import and an unset variable would
+    `spectre.memory.db` resolves `DB_FILE` at import and an unset variable would
     put this test on the live database.
     """
     env = {
@@ -1177,7 +1177,7 @@ def test_python_m_actions_verify_exits_1_when_a_finding_is_blocking(actions: Pat
     }
 
     completed = subprocess.run(
-        [sys.executable, "-m", "apps.cli.main", "actions", "verify"],
+        [sys.executable, "-m", "spectre.cli.main", "actions", "verify"],
         capture_output=True,
         text=True,
         check=False,

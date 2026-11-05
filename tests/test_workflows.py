@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from packages.workflow_engine.engine import (
+from spectre.workflow_engine.engine import (
     WORKFLOW_DEFINITIONS,
     WorkflowEngine,
     load_workflow_from_json,
@@ -259,7 +259,7 @@ steps:
 
 def test_engine_register_workflow() -> None:
     """Test WorkflowEngine.register_workflow method."""
-    from packages.workflow_engine.engine import Step, WorkflowDefinition
+    from spectre.workflow_engine.engine import Step, WorkflowDefinition
 
     engine = WorkflowEngine()
     custom_wf = WorkflowDefinition(

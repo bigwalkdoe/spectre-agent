@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-from packages.dispatch.resolve import DispatchError, actions_root, repo_root, resolve
+from spectre.dispatch.resolve import DispatchError, actions_root, repo_root, resolve
 from tests.dispatch.conftest import make_job
 
 _BODY = "#!/bin/bash\nexit 0\n"
@@ -161,7 +161,7 @@ def test_the_default_actions_root_is_resolved_before_the_containment_check(
     checkout.mkdir()
     (checkout / "actions").symlink_to(real)
     monkeypatch.delenv("SPECTRE_ACTIONS_ROOT", raising=False)
-    monkeypatch.setattr("packages.dispatch.resolve.repo_root", lambda: checkout)
+    monkeypatch.setattr("spectre.dispatch.resolve.repo_root", lambda: checkout)
 
     got = resolve(make_job())
     assert got.path == (real / "ok.sh").resolve()

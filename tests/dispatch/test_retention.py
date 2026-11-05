@@ -40,10 +40,10 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError
 from sqlmodel import Session, SQLModel, create_engine
 
-from packages.dispatch import registry, retention
-from packages.dispatch.envelope import Envelope, Status
-from packages.dispatch.registry import JOBS, get_job
-from packages.dispatch.retention import (
+from spectre.dispatch import registry, retention
+from spectre.dispatch.envelope import Envelope, Status
+from spectre.dispatch.registry import JOBS, get_job
+from spectre.dispatch.retention import (
     HIGH_FREQUENCY_JOBS,
     STANDARD_RETENTION,
     UNKNOWN_JOB,
@@ -52,8 +52,8 @@ from packages.dispatch.retention import (
     record_growth,
     rows_past_cutoff,
 )
-from packages.memory import db as db_module
-from packages.memory.db import MaintenanceRecord, save_run
+from spectre.memory import db as db_module
+from spectre.memory.db import MaintenanceRecord, save_run
 from tests.dispatch.conftest import make_job
 
 # A fixed instant, so a row placed exactly on a cutoff is placed exactly on it.

@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import Coroutine
 from typing import Any, TypeVar
 
-from packages.core.event_bus import EventBus
+from spectre.core.event_bus import EventBus
 
 _T = TypeVar("_T")
 

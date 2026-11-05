@@ -23,8 +23,8 @@ from pathlib import Path
 
 import pytest
 
-from packages.dispatch.lock import JobLock, LockUnavailable, lock_path, read_lock
-from packages.dispatch.registry import Job
+from spectre.dispatch.lock import JobLock, LockUnavailable, lock_path, read_lock
+from spectre.dispatch.registry import Job
 from tests.dispatch.conftest import make_job
 
 # The timeout the jobs under test carry, so the staleness arithmetic in the tests

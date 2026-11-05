@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from packages.config.settings import (
+from spectre.config.settings import (
     AgentConfig,
     MonitoringConfig,
     OllamaConfig,

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from packages.dispatch.registry import Job
+from spectre.dispatch.registry import Job
 
 
 def make_job(action: str = "ok.sh", **overrides: Any) -> Job:

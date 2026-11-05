@@ -7,8 +7,8 @@ from typing import Any
 
 import pytest
 
-from packages.dispatch import registry
-from packages.dispatch.registry import FIELD_DEFAULTS, JOBS, Job, get_job, groups, jobs_in_group
+from spectre.dispatch import registry
+from spectre.dispatch.registry import FIELD_DEFAULTS, JOBS, Job, get_job, groups, jobs_in_group
 
 
 def test_registry_has_61_jobs() -> None:

@@ -5,7 +5,7 @@ there, so nothing here executes the host's own maintenance suite. The actions ar
 real shell scripts and are really executed: this module's whole job is process
 handling — signals, process groups, pipes — and a stubbed `subprocess` would test
 the stub instead. The session-wide stub in `tests/conftest.py` deliberately does
-not reach `packages.dispatch`.
+not reach `spectre.dispatch`.
 
 The timeout cases cost real wall-clock time, because the scripts have to actually
 sleep for a timeout to be the thing under test.
@@ -23,9 +23,9 @@ from typing import Any
 
 import pytest
 
-from packages.dispatch.envelope import OUTPUT_LIMIT
-from packages.dispatch.resolve import resolve
-from packages.dispatch.runner import RunOutcome, _BoundedOutput, run_action
+from spectre.dispatch.envelope import OUTPUT_LIMIT
+from spectre.dispatch.resolve import resolve
+from spectre.dispatch.runner import RunOutcome, _BoundedOutput, run_action
 from tests.dispatch.conftest import make_job
 
 # The elision notice Task 3 established, matched rather than rebuilt so that a change

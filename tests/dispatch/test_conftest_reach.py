@@ -5,7 +5,7 @@
 applies `tests/conftest.py` to a test inside the nested package — the session
 `_initialize_database` and the autouse `_no_real_subprocess`, which is what keeps
 the suite from running real system commands. The imports in `tests/conftest.py`
-also have to happen before anything reaches `packages.memory.db`, because the
+also have to happen before anything reaches `spectre.memory.db`, because the
 database path is resolved at import time.
 
 Both are asserted here, from inside the package that could have broken them.
@@ -26,7 +26,7 @@ def test_root_conftest_fixtures_apply_inside_the_dispatch_package(request: pytes
 
 
 def test_hermetic_state_environment_was_redirected() -> None:
-    """Set at import time by `tests/conftest.py`, before `packages.memory.db` is
+    """Set at import time by `tests/conftest.py`, before `spectre.memory.db` is
     imported. The real path here would be `~/.config/spectre`, and the suite
     writes to whatever it is pointed at."""
     assert Path(os.environ["SPECTRE_CONFIG_DIR"]).name.startswith("spectre-tests-")

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import yaml
 
-from packages.workflow_engine.engine import (
+from spectre.workflow_engine.engine import (
     Step,
     WorkflowDefinition,
     WorkflowEngine,

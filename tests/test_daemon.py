@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from apps.daemon.main import SpectreDaemon, main
+from spectre.daemon.main import SpectreDaemon, main
 
 
 def test_daemon_init() -> None:
@@ -70,7 +70,7 @@ def test_daemon_kernel_services() -> None:
 
 
 def test_daemon_main_function() -> None:
-    with patch("apps.daemon.main.SpectreDaemon") as mock_daemon_class:
+    with patch("spectre.daemon.main.SpectreDaemon") as mock_daemon_class:
         mock_daemon = MagicMock()
         mock_daemon_class.return_value = mock_daemon
         main()

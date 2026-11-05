@@ -9,7 +9,7 @@ import sys
 import tempfile
 from unittest.mock import MagicMock, patch
 
-from apps.cli.main import app, main
+from spectre.cli.main import app, main
 
 # ── Help command tests ────────────────────────────────────────────────────────
 
@@ -195,7 +195,7 @@ def test_import_help() -> None:
 
 def test_main_returns_int() -> None:
     """main() should return an integer exit code."""
-    with patch("apps.cli.main._get_engine") as mock_engine:
+    with patch("spectre.cli.main._get_engine") as mock_engine:
         mock_engine.return_value = MagicMock()
         result = main(["--help"])
         assert isinstance(result, int)
@@ -643,7 +643,7 @@ def test_monitor() -> None:
 
 
 def test_python_dash_m_propagates_the_exit_code() -> None:
-    """`python -m apps.cli.main` must exit with whatever `main()` returns.
+    """`python -m spectre.cli.main` must exit with whatever `main()` returns.
 
     Found while wiring `spectre actions verify`, whose whole purpose is to be a CI
     gate — and which silently could not fail. The `__main__` guard called
@@ -664,7 +664,7 @@ def test_python_dash_m_propagates_the_exit_code() -> None:
     import subprocess
 
     completed = subprocess.run(
-        [sys.executable, "-m", "apps.cli.main", "run", "not-a-registered-job"],
+        [sys.executable, "-m", "spectre.cli.main", "run", "not-a-registered-job"],
         capture_output=True,
         text=True,
         cwd=os.getcwd(),
