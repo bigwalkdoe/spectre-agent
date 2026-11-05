@@ -76,4 +76,10 @@ for name in sorted(names):
             print(f"  shimmed {path} -> spectre run {name}")
 PY
 
+# ~/.local/bin/spectre has a stale shebang pointing at a missing python3.14;
+# remove it so /usr/local/bin/spectre wins on PATH.
+if [ -e /home/deon/.local/bin/spectre ]; then
+    rm -f /home/deon/.local/bin/spectre
+fi
+
 echo "==> done. Run 'spectre actions verify' to confirm."
