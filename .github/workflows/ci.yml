@@ -40,7 +40,7 @@ jobs:
         # command count. Nothing checked them: the tables were missing `GET /`
         # and named two path parameters differently from the routes, and the
         # count was off by one.
-        run: python scripts/check-api-docs.py
+        run: python actions/check-api-docs.py
 
       - name: Dashboard JavaScript syntax
         # DASHBOARD_HTML is a Python string literal that ships to the browser.
