@@ -57,7 +57,7 @@ echo "==> installing forwarder shims for tracked maintenance scripts"
 "$PYTHON" - "$REPO_ROOT" <<'PY'
 import json, os, sys
 root = sys.argv[1]
-data = json.load(open(os.path.join(root, "packages/dispatch/registry_data.json")))
+data = json.load(open(os.path.join(root, "spectre/dispatch/registry_data.json")))
 names = {j["name"] for j in data}
 bin_dir = "/usr/local/bin"
 for name in sorted(names):

@@ -20,7 +20,7 @@ ExecStart=%h/.config/spectre/venv/bin/python -m uvicorn spectre.api.main:app --h
 WorkingDirectory=%h/.config/spectre
 
 # SPECTRE_API_KEY is mandatory. An unset key makes the API return 503 on every
-# endpoint by design (see apps/api/main.py), so fail fast at start instead of
+# endpoint by design (see spectre/api/main.py), so fail fast at start instead of
 # serving a permanently-broken surface. Keep this file 0600 -- the key must not
 # appear in `systemctl show`, which renders the unit itself.
 #

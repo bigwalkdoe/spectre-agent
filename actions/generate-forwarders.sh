@@ -22,7 +22,7 @@ mkdir -p "$TARGET"
 "$PYTHON" - "$ROOT" "$TARGET" <<'PY'
 import json, os, sys
 root, target = sys.argv[1], sys.argv[2]
-data = json.load(open(os.path.join(root, "packages/dispatch/registry_data.json")))
+data = json.load(open(os.path.join(root, "spectre/dispatch/registry_data.json")))
 for job in data:
     name = job["name"]
     dest = os.path.join(target, name + ".sh") if False else os.path.join(target, name)

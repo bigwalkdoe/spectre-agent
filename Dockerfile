@@ -9,8 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Copy project files
 COPY pyproject.toml README.md ./
-COPY packages/ packages/
-COPY apps/ apps/
+COPY spectre/ spectre/
 COPY config/ config/
 
 # Install Python dependencies
