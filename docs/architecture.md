@@ -42,7 +42,7 @@ spectre/
 ├── config/                      # Configuration files
 ├── tests/                       # Test suite (170 tests)
 ├── docs/                        # Documentation
-└── scripts/                     # Installation and utilities
+└── actions/                     # Installation and utilities
 ```
 
 ## Core Components

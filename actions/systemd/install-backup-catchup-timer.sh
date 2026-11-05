@@ -10,7 +10,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 USER_UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 SERVICE_NAME="spectre-backup-catchup.service"
 TIMER_NAME="spectre-backup-catchup.timer"
-WRAPPER="$PROJECT_ROOT/scripts/backups/run-missed-backups.sh"
+WRAPPER="$PROJECT_ROOT/actions/backups/run-missed-backups.sh"
 
 usage() {
     cat <<EOF

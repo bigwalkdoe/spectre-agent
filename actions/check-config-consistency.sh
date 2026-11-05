@@ -20,7 +20,7 @@ NGINX_CONF="$PROJECT_ROOT/web-dashboard/nginx.conf"
 ALERTMANAGER="$PROJECT_ROOT/prometheus/alertmanager.yml"
 RULES="$PROJECT_ROOT/prometheus/alert_rules.yml"
 EXPORTER="$PROJECT_ROOT/prometheus/business-metrics-exporter.sh"
-BACKUP_DB="$PROJECT_ROOT/scripts/backups/backup-databases.sh"
+BACKUP_DB="$PROJECT_ROOT/actions/backups/backup-databases.sh"
 
 # Hosts that are legitimately not compose service names.
 ALLOWED_HOSTS="localhost 127.0.0.1 ::1 host.docker.internal"

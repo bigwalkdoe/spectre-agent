@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
+SCRIPTS = Path(__file__).resolve().parents[1] / "actions"
 VENV_PYTHON = "%h/.config/spectre/venv/bin/python"
 
 UNIT_NAMES = ("spectre.service", "spectre-api.service")

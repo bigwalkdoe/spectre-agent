@@ -77,7 +77,7 @@ deploy_maintenance_scripts() {
     echo "Deploying maintenance scripts to $server_name..."
     
     # Copy maintenance scripts directory
-    scp -P "$ssh_port" -r "$REPO_ROOT/scripts/" \
+    scp -P "$ssh_port" -r "$REPO_ROOT/actions/" \
         "$ssh_user@$ssh_host:/tmp/maintenance-scripts/"
     
     # Install scripts on remote server

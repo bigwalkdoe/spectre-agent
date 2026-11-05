@@ -85,7 +85,7 @@ def actions_root() -> Path:
     configured = os.environ.get("SPECTRE_ACTIONS_ROOT")
     if configured:
         return Path(configured).resolve()
-    return (repo_root() / "scripts").resolve()
+    return (repo_root() / "actions").resolve()
 
 
 def _provenance(root: Path) -> tuple[str, bool]:

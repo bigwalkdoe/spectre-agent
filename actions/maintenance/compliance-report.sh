@@ -305,21 +305,21 @@ build_opa_input() {
     fi
 
     local backup_encryption_enabled="false"
-    if [ -f "$PROJECT_ROOT/scripts/backups/backup-encryption.sh" ]; then
+    if [ -f "$PROJECT_ROOT/actions/backups/backup-encryption.sh" ]; then
         backup_encryption_enabled="true"
     fi
 
     local backup_verification_enabled="false"
-    if [ -f "$PROJECT_ROOT/scripts/backups/backup-verification.sh" ]; then
+    if [ -f "$PROJECT_ROOT/actions/backups/backup-verification.sh" ]; then
         backup_verification_enabled="true"
     fi
 
     local database_backups_enabled="false"
     local docker_volume_backups_enabled="false"
-    if [ -f "$PROJECT_ROOT/scripts/backups/backup-databases.sh" ]; then
+    if [ -f "$PROJECT_ROOT/actions/backups/backup-databases.sh" ]; then
         database_backups_enabled="true"
     fi
-    if [ -f "$PROJECT_ROOT/scripts/backups/backup-docker-volumes.sh" ]; then
+    if [ -f "$PROJECT_ROOT/actions/backups/backup-docker-volumes.sh" ]; then
         docker_volume_backups_enabled="true"
     fi
 
@@ -392,7 +392,7 @@ check_opa_policies() {
         log "INFO: opa not installed or not executable; skipping OPA policy evaluation"
         return 0
     fi
-    local policy_dir="$PROJECT_ROOT/scripts/security/opa/policies"
+    local policy_dir="$PROJECT_ROOT/actions/security/opa/policies"
     if [ ! -d "$policy_dir" ]; then
         log "INFO: no OPA policies found at $policy_dir"
         return 0

@@ -88,7 +88,7 @@ echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
     SYSTEMD_DIR="${HOME}/.config/systemd/user"
     mkdir -p "$SYSTEMD_DIR"
-    cp "${PROJECT_DIR}/scripts/spectre.service" "$SYSTEMD_DIR/"
+    cp "${PROJECT_DIR}/actions/spectre.service" "$SYSTEMD_DIR/"
     systemctl --user daemon-reload
     echo "Systemd service installed. Start with:"
     echo "  systemctl --user start spectre"

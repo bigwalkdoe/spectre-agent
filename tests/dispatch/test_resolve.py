@@ -119,7 +119,7 @@ def test_git_provenance_is_read_when_available(tmp_path: Path, monkeypatch: pyte
 
 def test_actions_root_defaults_below_repo_root(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SPECTRE_ACTIONS_ROOT", raising=False)
-    assert actions_root() == repo_root() / "scripts"
+    assert actions_root() == repo_root() / "actions"
 
 
 def test_an_empty_actions_root_env_falls_back_to_the_default(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -127,7 +127,7 @@ def test_an_empty_actions_root_env_falls_back_to_the_default(monkeypatch: pytest
     directory, which would make the entire checkout the actions root — and the
     containment guard would then bless every file in it."""
     monkeypatch.setenv("SPECTRE_ACTIONS_ROOT", "")
-    assert actions_root() == repo_root() / "scripts"
+    assert actions_root() == repo_root() / "actions"
 
 
 def test_an_actions_root_reached_through_a_symlink_contains_its_actions(
@@ -159,7 +159,7 @@ def test_the_default_actions_root_is_resolved_before_the_containment_check(
     _write_action(real / "ok.sh")
     checkout = tmp_path / "checkout"
     checkout.mkdir()
-    (checkout / "scripts").symlink_to(real)
+    (checkout / "actions").symlink_to(real)
     monkeypatch.delenv("SPECTRE_ACTIONS_ROOT", raising=False)
     monkeypatch.setattr("packages.dispatch.resolve.repo_root", lambda: checkout)
 

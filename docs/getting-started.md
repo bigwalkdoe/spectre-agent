@@ -9,7 +9,7 @@ Spectre is an autonomous system maintenance and operations platform for Fedora L
 ```bash
 git clone https://github.com/bigwalkdoe/spectre-agent.git
 cd spectre-agent
-bash scripts/install.sh
+bash actions/install.sh
 ```
 
 ## Manual Install
@@ -67,7 +67,7 @@ monitoring:
 
 ```bash
 # Install systemd service
-bash scripts/install.sh
+bash actions/install.sh
 # Answer 'y' to the systemd prompt
 
 # Or manually

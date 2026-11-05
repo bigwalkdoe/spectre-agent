@@ -217,7 +217,7 @@ down", which points debugging at the agent instead of at the port.
 Set the port explicitly rather than relying on the default:
 
 ```bash
-# systemd (see scripts/spectre-api.service — it requires both variables)
+# systemd (see actions/spectre-api.service — it requires both variables)
 install -m 600 /dev/null ~/.config/spectre/spectre.env
 printf 'SPECTRE_API_KEY=%s\n'      "$(openssl rand -hex 32)" >> ~/.config/spectre/spectre.env
 printf 'SPECTRE_API_HOST=127.0.0.1\nSPECTRE_API_PORT=8106\n'   >> ~/.config/spectre/spectre.env

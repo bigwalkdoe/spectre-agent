@@ -27,7 +27,7 @@ fi
 
 # The timer and cron can otherwise overlap. This is deliberately a best-effort
 # check: cron does not take the lock above, so look for its processes directly.
-if pgrep -f "$PROJECT_ROOT/scripts/backups/(backup-all|backup-databases|backup-docker-volumes|backup-configurations)[.]sh" >/dev/null 2>&1; then
+if pgrep -f "$PROJECT_ROOT/actions/backups/(backup-all|backup-databases|backup-docker-volumes|backup-configurations)[.]sh" >/dev/null 2>&1; then
     log "a scheduled backup is already running; skipping"
     exit 0
 fi
