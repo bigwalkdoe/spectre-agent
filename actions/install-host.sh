@@ -30,9 +30,21 @@ fi
 "$PYTHON" --version
 
 echo "==> installing spectre launcher"
+# Install the package into the venv (editable) so the `spectre` entry point exists.
+# pip is not shipped in this venv; fall back to uv (full path, since root's PATH
+# may not include ~/.local/bin).
+UV="${UV:-/home/deon/.local/bin/uv}"
+if ! "$PYTHON" -c "import spectre" 2>/dev/null; then
+    if [ -x "$UV" ]; then
+        "$UV" pip install -e "$REPO_ROOT" --python "$PYTHON"
+    else
+        echo "error: neither pip nor uv available to install spectre" >&2
+        exit 1
+    fi
+fi
 cat > /usr/local/bin/spectre <<LAUNCHER
 #!/bin/sh
-exec "$PYTHON" -m apps.cli.main "\$@"
+exec "$REPO_ROOT/.venv/bin/spectre" "\$@"
 LAUNCHER
 chmod 0755 /usr/local/bin/spectre
 
