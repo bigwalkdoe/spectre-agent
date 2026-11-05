@@ -51,7 +51,7 @@ jobs:
         run: |
           python - <<'PY' > /tmp/dashboard.js
           import re
-          src = open("apps/api/main.py", encoding="utf-8").read()
+          src = open("spectre/api/main.py", encoding="utf-8").read()
           html = re.search(r'DASHBOARD_HTML = """(.*?)"""', src, re.S).group(1)
           script = re.search(r"<script>(.*?)</script>", html, re.S)
           if not script:
